@@ -19,6 +19,10 @@ analysis:
   vocabulary_coherence: true
   low_confidence_threshold: 0.75
   confirm_on_coherent_description: true
+  auto_skip_implausible_boxes: true   # detector boxes that fail is_plausible_box
+                                      # (full-width slivers anchored on the frame
+                                      # edge) are artifacts: auto-skip them so they
+                                      # never reach the review queue or training
   safe_labels:                      # common labels; a description that does not
     - person                        # confirm them is still flagged (so persistent
     - car                           # false positives surface), just at lower

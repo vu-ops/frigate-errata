@@ -33,6 +33,7 @@ DEFAULTS: dict = {
         "vocabulary_coherence": True,
         "low_confidence_threshold": 0.75,
         "confirm_on_coherent_description": True,
+        "auto_skip_implausible_boxes": True,
         "safe_labels": ["person", "car", "truck", "bicycle"],
         "synonyms": {
             "person": [

@@ -25,6 +25,9 @@ class Analyzer:
         self.vocabulary_coherence = bool(analysis["vocabulary_coherence"])
         self.low_confidence_threshold = float(analysis["low_confidence_threshold"])
         self.confirm_on_coherent = bool(analysis.get("confirm_on_coherent_description", True))
+        self.auto_skip_implausible = bool(
+            analysis.get("auto_skip_implausible_boxes", True)
+        )
         self.safe_labels = set(analysis["safe_labels"])
         self.file_synonyms = dict(analysis.get("synonyms", {}) or {})
         self.synonyms = dict(self.file_synonyms)
@@ -57,6 +60,7 @@ class Analyzer:
             "noise": 0,
             "ignored": 0,
             "confirmed": 0,
+            "skipped": 0,
         }
         now = time.time()
         for row in rows:
@@ -102,6 +106,16 @@ class Analyzer:
             self.db.set_status(row["id"], "ignored")
             return "ignored"
 
+        # Degenerate detector boxes (e.g. a full-width sliver anchored on the
+        # frame edge) are artifacts, not real objects. Keep them out of the
+        # review queue and the training set entirely.
+        if row["box"] and not is_plausible_box(row["box"]):
+            if self.auto_skip_implausible:
+                self.db.set_status(row["id"], "skipped", reviewed=True)
+                return "skipped"
+            self.db.set_flag(row["id"], "noise", PRIORITY_NOISE, "")
+            return "noise"
+
         reason = None
         priority = 0
         description_confirms = False
@@ -130,13 +144,6 @@ class Analyzer:
                 if recent >= self.noise_count:
                     reason = "noise"
                     priority = PRIORITY_NOISE
-
-        if reason is None and row["box"] and not is_plausible_box(row["box"]):
-            # Degenerate detector box (e.g. a full-width sliver at the frame
-            # edge). A coherent scene description must never auto-confirm one of
-            # these: doing so feeds the artifact back in as a training label.
-            reason = "noise"
-            priority = PRIORITY_NOISE
 
         if reason is None:
             self.db.set_status(row["id"], "confirmed")

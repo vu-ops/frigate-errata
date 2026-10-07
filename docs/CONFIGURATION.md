@@ -61,6 +61,12 @@ analysis:
                                    # the label, treat it as independent
                                    # confirmation: auto-confirm even if the
                                    # detector confidence is low (skips review)
+  auto_skip_implausible_boxes: true  # detector boxes that fail the plausibility
+                                   # check (full-width slivers anchored on the
+                                   # frame edge) are artifacts: auto-skip them
+                                   # instead of queuing them for review. Set
+                                   # false to fall back to flagging them as
+                                   # noise in the review queue.
   synonyms:                        # words that count as a label match in
     person:                        # descriptions. Purely data-driven: edit
       - man                        # this list to teach the vocabulary check,
@@ -210,7 +216,13 @@ logging:
 For every unprocessed event (newest first):
 
 1. `confidence < min_confidence` → status `ignored` (out of scope).
-2. Vocabulary check (needs a GenAI description). A match is the label
+2. Degenerate detector box (fails `is_plausible_box`: a full-width sliver
+   anchored on the frame edge) → status `skipped` when
+   `auto_skip_implausible_boxes` is on (the default), so it never reaches the
+   queue or the dataset. With the option off it is flagged as `noise` instead.
+   `python -m errata.trainer --check-boxes` reports these, and
+   `--skip-degenerate-boxes` retroactively skips any already queued.
+3. Vocabulary check (needs a GenAI description). A match is the label
    itself, any configured `synonyms` entry, their plural/possessive forms, or
    a built-in irregular plural:
    - no match → `mismatch` (priority 3, or 4 if confidence >= 0.9 —
@@ -223,11 +235,11 @@ For every unprocessed event (newest first):
    - match → the VLM independently confirms the detection; if
      `confirm_on_coherent_description` is on, low-confidence
      flagging is skipped (no review needed for an agreed label).
-3. `low_confidence` — `confidence < low_confidence_threshold`, unless
+4. `low_confidence` — `confidence < low_confidence_threshold`, unless
    suppressed by the confirmation above. Priority 1.
-4. `noise` — same camera + label appears `count` times inside
+5. `noise` — same camera + label appears `count` times inside
    `window_hours`. Priority 2.
-5. Otherwise → status `confirmed` (nothing to review).
+6. Otherwise → status `confirmed` (nothing to review).
 
 The review queue is ordered by priority (high first), then newest.
 
