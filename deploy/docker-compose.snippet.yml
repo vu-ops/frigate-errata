@@ -1,0 +1,63 @@
+# Compose service for errata.
+# Copy the service below into the docker-compose.yml that also runs Frigate,
+# then adjust the /path/to/errata-app placeholders to wherever you installed
+# this folder. Errata expects to reach Frigate by container name on this
+# network; the default config uses http://frigate:5000.
+#
+# Accelerator notes (training only):
+#   Intel Arc (default, tested) - devices/device_cgroup_rules/group_add below.
+#   NVIDIA (untested)           - build with GPU_TYPE=cuda and use the
+#                                 commented `gpus: all` block instead.
+#   AMD (untested)              - build with GPU_TYPE=rocm and use the
+#                                 commented /dev/kfd block instead.
+# On CPU-only hosts the device lines below are harmless; training falls back
+# to CPU automatically.
+
+services:
+  errata:
+    container_name: errata
+    init: true
+    image: errata:local
+    build:
+      context: /path/to/errata-app    # <- folder containing the Dockerfile
+      args:
+        GPU_TYPE: xpu                 # xpu (Intel) | cuda (NVIDIA) | rocm (AMD) | cpu
+    restart: unless-stopped
+    shm_size: "8g"
+    depends_on:
+      - frigate
+
+    # --- Intel Arc (GPU_TYPE=xpu) ---------------------------------------
+    devices:
+      - /dev/dri/renderD128:/dev/dri/renderD128
+    device_cgroup_rules:
+      - "c 226:* rmw"
+    group_add:
+      - "109"                        # render group gid on the host (check with: getent group render)
+
+    # --- NVIDIA (untested): remove the Intel device lines above and use: ---
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+    # --- AMD ROCm (untested): remove the Intel device lines above and use: ---
+    # devices:
+    #   - /dev/kfd:/dev/kfd
+    #   - /dev/dri:/dev/dri
+    # group_add:
+    #   - "video"
+
+    environment:
+      TZ: "UTC"                      # set to your timezone, e.g. America/New_York
+      ERRATA_CONFIG: /config/errata.yaml
+      YOLO_CONFIG_DIR: /data/ultralytics
+    env_file:
+      - /path/to/errata-app/.env      # frigate credentials, if auth enabled
+    volumes:
+      - /path/to/errata-app/config.yaml:/config/errata.yaml:ro
+      - /path/to/errata-app/data:/data
+      - /path/to/errata-app/models:/publish

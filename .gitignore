@@ -1,0 +1,22 @@
+# Runtime state and private data (camera imagery, DB, exported datasets)
+data/
+models/
+*.db
+*.db-shm
+*.db-wal
+
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Build / local artifacts (the image downloads these at build time)
+debs/
+intel-debs/
+lib/
+*.ipynb_checkpoints/
+*.log

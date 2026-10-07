@@ -1,0 +1,12 @@
+data/
+models/
+docs/
+deploy/
+lib/
+d/
+*.md
+.env
+__pycache__/
+*.pyc
+.venv/
+.git/

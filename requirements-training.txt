@@ -1,0 +1,3 @@
+ultralytics>=8.3
+onnx>=1.16
+onnxslim>=0.1

@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+{% block title %}Errata — Summary{% endblock %}
+{% block content %}
+{% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+<div class="stat-grid">
+  {% for status, n in counts.items() | sort %}
+  <div class="stat"><div class="n">{{ n }}</div><div class="t">{{ status }}</div></div>
+  {% endfor %}
+  <div class="stat"><div class="n">{{ corrections_total }}</div><div class="t">Corrections total</div></div>
+</div>
+
+<div class="section-title">Retrain progress</div>
+<div>{{ since_count }} / {{ threshold }} corrections since last model</div>
+<div class="progress"><div class="fill" style="width: {{ [since_count / threshold * 100, 100] | min }}%"></div></div>
+
+<div class="section-title">Corrections by camera</div>
+<table>
+  <tr><th>Camera</th><th>Count</th></tr>
+  {% for row in corrections_by_camera %}<tr><td>{{ row.k }}</td><td class="n">{{ row.n }}</td></tr>{% endfor %}
+</table>
+
+<div class="section-title">Corrections by label</div>
+<table>
+  <tr><th>Label</th><th>Count</th></tr>
+  {% for row in corrections_by_label %}<tr><td>{{ row.k }}</td><td class="n">{{ row.n }}</td></tr>{% endfor %}
+</table>
+
+<div class="section-title">Training data — on-disk dataset</div>
+<div class="meta">This is what the trainer actually consumes. Human = confirmed corrections; pseudo = auto-labels from coherent descriptions; backgrounds = false-positive frames (empty label, teach "nothing here").</div>
+{% if dataset.present %}
+<div class="stat-grid">
+  <div class="stat"><div class="n">{{ dataset.images.total }}</div><div class="t">Images</div></div>
+  <div class="stat"><div class="n">{{ dataset.objects.total }}</div><div class="t">Object boxes</div></div>
+  <div class="stat"><div class="n">{{ dataset.backgrounds.total }}</div><div class="t">Backgrounds</div></div>
+  <div class="stat"><div class="n">{{ dataset.pseudo.images }}</div><div class="t">Pseudo images</div></div>
+</div>
+<div class="meta">train {{ dataset.images.train }} / val {{ dataset.images.val }} ·
+  human {{ dataset.human.images }} images ({{ dataset.human.objects }} boxes, {{ dataset.human.backgrounds }} backgrounds) ·
+  pseudo {{ dataset.pseudo.images }} images ({{ dataset.pseudo.objects }} boxes)</div>
+<table>
+  <tr><th>Class</th><th>Human</th><th>Pseudo</th><th>Train</th><th>Val</th><th>Total</th></tr>
+  {% for c in dataset.classes %}
+  <tr><td>{{ c.label }}</td><td class="n">{{ c.human }}</td><td class="n">{{ c.pseudo }}</td><td class="n">{{ c.train }}</td><td class="n">{{ c.val }}</td><td class="n">{{ c.total }}</td></tr>
+  {% endfor %}
+  {% if not dataset.classes %}<tr><td colspan="6" class="empty">No objects in dataset.</td></tr>{% endif %}
+</table>
+{% else %}
+<div class="empty">No dataset exported yet.</div>
+{% endif %}
+{% if unexported %}
+<div class="msg hint"><strong>{{ unexported }}</strong> correction(s) collected since the dataset was last exported are <strong>not</strong> in it. The Train button only trains on the dataset shown above — download the Mac kit (which re-exports) or run <code>python -m errata.trainer --export-only</code> / <code>--rebuild</code> inside the container to fold them in.</div>
+{% endif %}
+
+<div class="section-title">Model versions</div>
+<div class="meta">"Corrections" is the all-time DB correction count at publish time. "Trained on" is the dataset snapshot captured when that model was trained.</div>
+{% if versions %}
+<table>
+  <tr><th>Published</th><th>Path</th><th>Corrections</th><th>Trained on</th></tr>
+  {% for v in versions %}
+  <tr>
+    <td>{{ v.created_at | localts }}</td>
+    <td>{{ v.model_path }}</td>
+    <td class="n">{{ v.training_count }}</td>
+    <td>
+      {% if v.dataset %}
+        {{ v.dataset.images.total }} img · {{ v.dataset.objects.total }} obj · {{ v.dataset.pseudo.images }} pseudo
+        <details>
+          <summary>per-class ({{ v.dataset.classes | length }})</summary>
+          <table>
+            <tr><th>Class</th><th>Human</th><th>Pseudo</th><th>Train</th><th>Val</th><th>Total</th></tr>
+            {% for c in v.dataset.classes %}
+            <tr><td>{{ c.label }}</td><td class="n">{{ c.human }}</td><td class="n">{{ c.pseudo }}</td><td class="n">{{ c.train }}</td><td class="n">{{ c.val }}</td><td class="n">{{ c.total }}</td></tr>
+            {% endfor %}
+          </table>
+          <div class="meta">backgrounds: {{ v.dataset.backgrounds.total }} · human images: {{ v.dataset.human.images }} · pseudo images: {{ v.dataset.pseudo.images }}</div>
+        </details>
+      {% else %}
+        <span class="meta">not recorded</span>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<div class="empty">No models published yet.</div>
+{% endif %}
+
+<div class="section-title">Model deployment — Frigate</div>
+<div class="meta">Activating a model saves a backup of the Frigate config, switches the model path via the Frigate API, and restarts Frigate (detection pauses for a few seconds). Reverting restores a previous config backup the same way.</div>
+<div id="deploy"><div class="empty">Loading models…</div></div>
+<script>
+(function() {
+  var base = '{{ base }}';
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function(c) {
+      return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c];
+    });
+  }
+  function fmt(ts) { return new Date(ts * 1000).toLocaleString(); }
+  function load() {
+    var box = document.getElementById('deploy');
+    fetch(base + '/api/models').then(function(r) { return r.json(); }).then(function(d) {
+      var html = '';
+      if (d.error) html += '<div class="meta">Frigate: unavailable (' + esc(d.error) + ')</div>';
+      else if (d.active_name) html += '<div class="meta">Active in Frigate: <strong>' + esc(d.active_name) + '</strong></div>';
+      html += '<table><tr><th>Published</th><th>Model</th><th>Corrections</th><th>Trained on</th><th>Size</th><th></th></tr>';
+      if (!d.models.length) html += '<tr><td colspan="6" class="empty">No published models.</td></tr>';
+      for (var i = 0; i < d.models.length; i++) {
+        var m = d.models[i];
+        var active = m.name === d.active_name;
+        var tds = m.training_dataset;
+        var trained = tds
+          ? esc(tds.images.total + ' img · ' + tds.objects.total + ' obj · ' + tds.pseudo.images + ' pseudo')
+          : '<span class="meta">not recorded</span>';
+        html += '<tr><td>' + fmt(m.created_at) + '</td><td>' + esc(m.name) + (active ? ' <strong>(active)</strong>' : '') +
+          '</td><td class="n">' + (m.training_count == null ? '—' : m.training_count) + '</td><td>' + trained + '</td><td class="n">' + m.size_mb + ' MB</td>' +
+          '<td>' + (active ? '' : '<button data-model="' + esc(m.name) + '" class="act">Activate</button>') + '</td></tr>';
+      }
+      html += '</table>';
+      if (d.backups && d.backups.length) {
+        html += '<div class="section-title">Frigate config backups</div>';
+        html += '<table><tr><th>Saved</th><th>Reason</th><th>Active model at backup</th><th></th></tr>';
+        for (var j = 0; j < d.backups.length; j++) {
+          var b = d.backups[j];
+          html += '<tr><td>' + fmt(b.created_at) + '</td><td>' + esc(b.reason) + '</td><td>' + esc(b.model_path || '—') +
+            '</td><td><button data-backup="' + b.id + '" class="rev">Revert</button></td></tr>';
+        }
+        html += '</table>';
+      } else {
+        html += '<div class="meta">No config backups yet — one is saved automatically before each activation/revert.</div>';
+      }
+      box.innerHTML = html;
+      Array.prototype.forEach.call(box.querySelectorAll('button.act'), function(btn) {
+        btn.onclick = function() {
+          deploy('/api/models/activate', { model: btn.getAttribute('data-model') },
+            'Activate ' + btn.getAttribute('data-model') + '?\n\nA config backup is saved first, then the Frigate config is updated and Frigate restarts (detection pauses briefly).');
+        };
+      });
+      Array.prototype.forEach.call(box.querySelectorAll('button.rev'), function(btn) {
+        btn.onclick = function() {
+          deploy('/api/models/backups/' + btn.getAttribute('data-backup') + '/revert', {},
+            'Revert Frigate config to backup #' + btn.getAttribute('data-backup') + '?\n\nThe current config is backed up first, then Frigate restarts.');
+        };
+      });
+    }).catch(function(e) {
+      box.innerHTML = '<div class="empty">Failed to load models: ' + esc(e) + '</div>';
+    });
+  }
+  function deploy(url, body, confirmMsg) {
+    if (!confirm(confirmMsg)) return;
+    fetch(base + url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function(r) { return r.json(); }).then(function(res) {
+      alert(res.ok ? ('Done: ' + (res.model || res.restored_from || '')) : ('Failed: ' + (res.error || 'unknown error')));
+      load();
+    }).catch(function(e) { alert('Failed: ' + e); });
+  }
+  load();
+})();
+</script>
+
+<div class="section-title">Training</div>
+<div class="meta">The Train button trains on the device configured in <code>config.yaml</code> (<code>training.device</code>; Intel Arc XPU by default) and falls back to CPU automatically if the GPU is unavailable. Prefer faster training? <a href="{{ base }}/api/train/mac-kit.zip">Download the Mac training kit (.zip)</a> — it bundles the dataset, the source files, and a shell script to train on your Mac (see its README for Homebrew setup).</div>
+{% if train_state.running %}
+<div class="meta">Training in progress — started {{ train_state.started_at | localts }}</div>
+{% elif train_state.finished_at %}
+<div class="meta">Last run {{ train_state.finished_at | localts }} — {{ train_state.detail }}</div>
+{% else %}
+<div class="meta">No training run yet. Use the Train button in the header.</div>
+{% endif %}
+
+<div class="section-title">Last scheduler run</div>
+{% if last_run %}
+<div class="meta">{{ last_run | localts }} — {{ last_stats }}</div>
+{% else %}
+<div class="meta">No run yet.</div>
+{% endif %}
+{% endblock %}

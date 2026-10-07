@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Errata{% endblock %}</title>
+<style>
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: #0f1115; color: #e6e6e6; }
+header { display: flex; gap: 1.5rem; align-items: center; padding: 0.75rem 1.25rem; background: #161a22; border-bottom: 1px solid #232833; }
+header a { color: #9fb4ff; text-decoration: none; font-weight: 600; }
+header .brand { color: #fff; font-size: 1.05rem; letter-spacing: 0.02em; }
+main { padding: 1.25rem; max-width: 1400px; margin: 0 auto; }
+a { color: #9fb4ff; }
+.msg { background: #1d2b1f; border: 1px solid #2f5233; padding: 0.5rem 0.75rem; border-radius: 8px; margin-bottom: 1rem; font-size: 0.9rem; }
+.filters form { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: flex-end; margin-bottom: 1rem; }
+.filters label { display: flex; flex-direction: column; font-size: 0.72rem; color: #8a93a6; gap: 0.25rem; text-transform: uppercase; letter-spacing: 0.04em; }
+select, button, input { background: #1b2130; color: #e6e6e6; border: 1px solid #2b3347; border-radius: 6px; padding: 0.4rem 0.6rem; font-size: 0.9rem; }
+button { cursor: pointer; }
+button:hover { filter: brightness(1.15); }
+button.primary { background: #2f6feb; border-color: #2f6feb; color: #fff; font-weight: 600; }
+button.warn { background: #7a2e2e; border-color: #8f3b3b; color: #fff; }
+.grid { display: grid; grid-template-columns: 1fr; gap: 1.25rem; }
+.card { background: #161a22; border: 1px solid #232833; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
+.card img { width: 100%; height: auto; display: block; background: #0a0c10; }
+.card .body { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; flex: 1; }
+.meta { font-size: 0.8rem; color: #8a93a6; display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+.badge { padding: 0.1rem 0.5rem; border-radius: 99px; font-size: 0.72rem; font-weight: 600; border: 1px solid transparent; white-space: nowrap; }
+.badge.mismatch { background: #4a1f1f; color: #ff9d9d; border-color: #7a2e2e; }
+.badge.low_confidence { background: #46351a; color: #ffd58a; border-color: #6d5424; }
+.badge.noise { background: #1c3350; color: #9ec1ff; border-color: #2b4a73; }
+.badge.suggest { background: #3d2b4f; color: #d0b3ff; border-color: #5c4273; }
+.badge.status { background: #2b2f3a; color: #c9d1e0; border-color: #3a4152; }
+.badge.corrected { background: #1d2b22; color: #a8e6b8; border-color: #2f5233; }
+.quick { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.quick form { margin: 0; }
+.chip { border-radius: 99px; font-size: 0.8rem; font-weight: 600; padding: 0.25rem 0.75rem; }
+.chip.detected { background: #20303f; color: #a8d3ff; border: 1px solid #2e4a63; }
+.chip.suggest { background: #3d2b4f; color: #d0b3ff; border: 1px solid #5c4273; }
+.badge.label { background: #20303f; color: #a8d3ff; border-color: #2e4a63; }
+.badge.camera { background: #1d2b22; color: #a8e6b8; border-color: #2f5233; }
+.desc { font-size: 0.9rem; margin: 0; color: #c9d1e0; flex: 1; line-height: 1.4; }
+.actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.actions select { flex: 1; min-width: 9rem; }
+table { border-collapse: collapse; width: 100%; margin: 0.5rem 0 1.5rem; }
+th, td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid #232833; font-size: 0.9rem; }
+th { color: #8a93a6; font-weight: 600; }
+td.n { text-align: right; }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.stat { background: #161a22; border: 1px solid #232833; border-radius: 10px; padding: 0.9rem; }
+.stat .n { font-size: 1.6rem; font-weight: 700; color: #fff; }
+.stat .t { font-size: 0.72rem; color: #8a93a6; text-transform: uppercase; letter-spacing: 0.05em; }
+.empty { color: #8a93a6; padding: 2.5rem; text-align: center; border: 1px dashed #232833; border-radius: 10px; }
+.section-title { font-size: 0.85rem; color: #8a93a6; text-transform: uppercase; letter-spacing: 0.06em; margin: 1.5rem 0 0.25rem; }
+.msg.hint { line-height: 1.5; font-size: 0.88rem; }
+table input { width: 100%; }
+table td { vertical-align: middle; }
+table td.k { width: 11rem; white-space: nowrap; }
+img.zoom { cursor: zoom-in; }
+#lightbox { position: fixed; inset: 0; background: rgba(5, 7, 10, 0.92); display: flex; align-items: center; justify-content: center; z-index: 100; cursor: zoom-out; }
+#lightbox[hidden] { display: none; }
+#lightbox img { max-width: 95vw; max-height: 95vh; border-radius: 8px; box-shadow: 0 0 60px rgba(0,0,0,.8); }
+.progress { background: #1b2130; border: 1px solid #2b3347; border-radius: 99px; height: 12px; overflow: hidden; margin: 0.5rem 0 1.5rem; max-width: 480px; }
+.progress .fill { background: #2f6feb; height: 100%; }
+details { margin-top: 0.35rem; }
+details summary { cursor: pointer; color: #9fb4ff; font-size: 0.8rem; }
+details table { margin: 0.4rem 0 0.2rem; }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">Errata</span>
+  <a href="{{ base }}/">Review queue</a>
+  <a href="{{ base }}/summary">Summary</a>
+  <a href="{{ base }}/synonyms">Synonyms</a>
+  <a href="{{ base }}/api/queue.json">Export JSON</a>
+  <a href="{{ base }}/api/train/mac-kit.zip">Mac kit</a>
+  <button id="run-now" title="Fetch new events from Frigate and analyze them" onclick="runNow(this)">Fetch latest</button>
+  <button id="train-btn" title="Retrain the model on CPU with collected corrections" onclick="startTrain(this)">Train</button>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+<div id="lightbox" hidden><img id="lightbox-img" alt="snapshot preview"></div>
+<script>
+const lightbox = document.getElementById('lightbox');
+const lightboxImg = document.getElementById('lightbox-img');
+function openLightbox(src) { lightboxImg.src = src; lightbox.hidden = false; }
+function closeLightbox() { lightbox.hidden = true; lightboxImg.src = ''; }
+lightbox.addEventListener('click', closeLightbox);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLightbox(); });
+async function runNow(btn) {
+  btn.disabled = true;
+  btn.textContent = 'Running…';
+  try {
+    await fetch('{{ base }}/api/run-now', { method: 'POST' });
+    await new Promise(r => setTimeout(r, 1500));
+    location.reload();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Fetch latest';
+  }
+}
+async function startTrain(btn) {
+  if (!confirm('Start a training run now?')) return;
+  btn.disabled = true;
+  btn.textContent = 'Training…';
+  try {
+    const r = await fetch('{{ base }}/api/train', { method: 'POST' });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) {
+      alert('Could not start training: ' + (j.detail || r.status));
+      btn.disabled = false;
+      btn.textContent = 'Train';
+      return;
+    }
+    while (true) {
+      const s = await (await fetch('{{ base }}/api/train/status')).json();
+      if (!s.running) {
+        alert(s.ok === false ? ('Training failed: ' + s.detail) : ('Training finished: ' + s.detail));
+        location.reload();
+        return;
+      }
+      await new Promise(res => setTimeout(res, 5000));
+    }
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = 'Train';
+  }
+}
+</script>
+</body>
+</html>

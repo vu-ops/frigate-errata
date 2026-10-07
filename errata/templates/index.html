@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% block content %}
+{% set return_to = 'camera=' ~ (filters.camera | urlencode) ~ '&label=' ~ (filters.label | urlencode) ~ '&reason=' ~ (filters.reason | urlencode) ~ '&corrected=' ~ (filters.corrected | urlencode) ~ '&status=' ~ (filters.status | urlencode) %}
+<div class="filters">
+  <form method="get" action="{{ base }}/">
+    <label>View
+      <select name="status" onchange="this.form.submit()">
+        {% for value, text in view_statuses %}<option value="{{ value }}" {% if value == filters.status %}selected{% endif %}>{{ text }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Camera
+      <select name="camera" onchange="this.form.submit()">
+        <option value="">All</option>
+        {% for c in cameras %}<option value="{{ c }}" {% if c == filters.camera %}selected{% endif %}>{{ c }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Label
+      <select name="label" onchange="this.form.submit()">
+        <option value="">All</option>
+        {% for l in event_labels %}<option value="{{ l }}" {% if l == filters.label %}selected{% endif %}>{{ l }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Reason
+      <select name="reason" onchange="this.form.submit()">
+        <option value="">All</option>
+        {% for r in reasons %}<option value="{{ r }}" {% if r == filters.reason %}selected{% endif %}>{{ r }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Corrected to
+      <select name="corrected" onchange="this.form.submit()">
+        <option value="">All</option>
+        {% for c in corrected_labels %}<option value="{{ c }}" {% if c == filters.corrected %}selected{% endif %}>{{ c }}</option>{% endfor %}
+      </select>
+    </label>
+    <noscript><button class="primary" type="submit">Filter</button></noscript>
+  </form>
+  <form method="post" action="{{ base }}/bulk" onsubmit="return confirm('Apply the selected status to ALL pending events matching the filters?');">
+    <input type="hidden" name="mode" value="status">
+    <input type="hidden" name="camera" value="{{ filters.camera }}">
+    <input type="hidden" name="label" value="{{ filters.label }}">
+    <input type="hidden" name="reason" value="{{ filters.reason }}">
+    <input type="hidden" name="return_to" value="{{ return_to }}">
+    <label>Set status
+      <select name="status">
+        {% for s in bulk_statuses %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+      </select>
+    </label>
+    <button class="primary" type="submit">Apply to matching</button>
+  </form>
+  <form method="post" action="{{ base }}/bulk" onsubmit="return confirm('Set this label on EVERY event in the current View matching the filters? This replaces any existing correction on those events.');">
+    <input type="hidden" name="mode" value="label">
+    <input type="hidden" name="camera" value="{{ filters.camera }}">
+    <input type="hidden" name="label" value="{{ filters.label }}">
+    <input type="hidden" name="reason" value="{{ filters.reason }}">
+    <input type="hidden" name="corrected" value="{{ filters.corrected }}">
+    <input type="hidden" name="status" value="{{ filters.status }}">
+    <input type="hidden" name="return_to" value="{{ return_to }}">
+    <label>Set label
+      <select name="new_label">
+        {% for l in labels %}<option value="{{ l }}">{{ l }}</option>{% endfor %}
+      </select>
+    </label>
+    <button class="warn" type="submit">Apply label to matching</button>
+  </form>
+</div>
+{% if rows %}
+<div class="grid">
+{% for row in rows %}
+{% set suggested = row.suggested_label.split(',')[0] if row.suggested_label else '' %}
+{% set corrected = row.corrected_label if row.corrected_label and row.corrected_label != 'false_positive' else '' %}
+{% set is_reviewed = row.status in reviewed_statuses %}
+{% set default_label = corrected or suggested or row.label %}
+  <div class="card">
+    <img src="{{ base }}/api/snapshots/{{ row.id }}.jpg?v=2" alt="snapshot" loading="lazy" class="zoom" onclick="openLightbox(this.src)">
+    <div class="body">
+      <div class="meta">
+        <span class="badge camera">{{ row.camera }}</span>
+        <span class="badge label">{{ row.label }}</span>
+        {% if corrected %}<span class="badge corrected">→ {{ corrected }}</span>{% endif %}
+        {% if is_reviewed %}<span class="badge status">{{ row.status }}</span>{% endif %}
+        {% if row.flag_reason %}<span class="badge {{ row.flag_reason }}">{{ row.flag_reason }}</span>{% endif %}
+        {% if suggested and suggested != row.label %}<span class="badge suggest">suggests: {{ row.suggested_label | replace(',', ', ') }}</span>{% endif %}
+        <span>{{ '%.0f%%'|format((row.confidence or 0) * 100) }}</span>
+        <span>{{ row.start_time | localts }}</span>
+        {% if is_reviewed and row.reviewed_at %}<span>reviewed {{ row.reviewed_at | localts }}</span>{% endif %}
+      </div>
+      {% if row.description %}<p class="desc">{{ row.description }}</p>{% endif %}
+      <div class="quick">
+        <form method="post" action="{{ base }}/review/{{ row.id }}">
+          <input type="hidden" name="return_to" value="{{ return_to }}">
+          <input type="hidden" name="action" value="confirm">
+          <input type="hidden" name="label" value="{{ row.label }}">
+          <button class="chip detected" title="Confirm as detected label">{{ row.label }}</button>
+        </form>
+        {% for s in row.suggested_label.split(',') if s and s != row.label %}
+        <form method="post" action="{{ base }}/review/{{ row.id }}">
+          <input type="hidden" name="return_to" value="{{ return_to }}">
+          <input type="hidden" name="action" value="confirm">
+          <input type="hidden" name="label" value="{{ s }}">
+          <button class="chip suggest" title="Confirm as suggested label">{{ s }}</button>
+        </form>
+        {% endfor %}
+      </div>
+      <form class="actions" method="post" action="{{ base }}/review/{{ row.id }}">
+        <input type="hidden" name="return_to" value="{{ return_to }}">
+        <select name="label">
+          {% for l in labels %}<option value="{{ l }}" {% if l == default_label %}selected{% endif %}>{{ l }}</option>{% endfor %}
+          {% if row.label not in labels %}<option value="{{ row.label }}" {% if row.label == default_label %}selected{% endif %}>{{ row.label }}</option>{% endif %}
+          {% if corrected and corrected not in labels %}<option value="{{ corrected }}" selected>{{ corrected }}</option>{% endif %}
+          {% if suggested and suggested not in labels %}<option value="{{ suggested }}" selected>{{ suggested }}</option>{% endif %}
+          <option value="false_positive">false_positive</option>
+        </select>
+        <button class="primary" name="action" value="confirm">Change</button>
+        <button class="warn" name="action" value="false_positive">False positive</button>
+        {% if is_reviewed %}
+        <button name="action" value="reset" formnovalidate title="Undo this review and return the event to the queue">Undo review</button>
+        {% else %}
+        <button name="action" value="skip">Skip</button>
+        {% endif %}
+      </form>
+    </div>
+  </div>
+{% endfor %}
+</div>
+{% else %}
+<div class="empty">Nothing here — no events match this view.</div>
+{% endif %}
+{% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+<div class="stat-grid">
+  <div class="stat"><div class="n">{{ pending_count }}</div><div class="t">Pending review</div></div>
+  <div class="stat"><div class="n">{{ total_count }}</div><div class="t">Events tracked</div></div>
+</div>
+<div class="msg hint">
+  Each card shows a detection: the snapshot (click to enlarge), the YOLO label,
+  confidence, why it was flagged, and the GenAI description. The quick buttons
+  confirm the image as that label in one click — first is what YOLO detected,
+  the rest are suggestions from the GenAI description. Use the dropdown +
+  <b>Change</b> for any other label, <b>False positive</b> if there is nothing
+  there (only when no other object of interest is in frame), or <b>Skip</b> to
+  set it aside entirely. Corrections accumulate until the retrain threshold —
+  see Summary for progress.
+  <br>
+  <b>Review past decisions:</b> use the <b>View</b> filter to show
+  <i>Corrected</i>, <i>False positive</i>, <i>Auto-confirmed</i>, <i>Ignored</i>,
+  or <i>Skipped</i> events. A corrected card shows the chosen label as
+  <span class="badge corrected">→ label</span>; pick a different one and click
+  <b>Change</b> to fix it, or <b>Undo review</b> to send the event back to the
+  queue. Re-reviewing replaces the previous correction, so training always uses
+  your latest decision.
+  <br>
+  <b>Bulk change:</b> the toolbar has two actions. <b>Apply to matching</b> sets
+  a <i>status</i> on every pending event matching the Camera / Label / Reason
+  filters (leave them at <i>All</i> for the whole queue; pick <i>skipped</i> to
+  set aside all remaining items in one go). <b>Apply label to matching</b>
+  re-labels every event in the current <b>View</b> matching the filters to the
+  chosen label — e.g. View <i>Corrected</i> + Corrected-to <i>fox</i> + Set
+  label <i>coyote</i> re-labels all fox corrections in one click. It replaces
+  any existing correction on those events, so double-check the View and
+  filters first.
+</div>
+{% endblock %}
