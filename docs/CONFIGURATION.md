@@ -511,7 +511,7 @@ manually (or cron it).
 | Full reset | stop errata, `rm -rf data/` , start again |
 | Logs | `docker logs -f errata` |
 | DB inspect | `sqlite3 data/errata.db 'select status, count(*) from events group by status;'` |
-| Degenerate-box artifact | Full-width, few-pixels-tall boxes at the frame bottom (wide cameras). Check: `docker exec errata python -m errata.trainer --check-boxes` (read-only). Fix: `docker exec errata python -m errata.trainer --skip-degenerate-boxes`, then retrain and activate — human corrections are never touched. See `UPGRADE.md` for the full story |
+| Degenerate-box artifact | Full-width, few-pixels-tall boxes at the frame bottom (wide cameras). Check: `docker exec errata python -m errata.trainer --check-boxes` (read-only). Fix: `docker exec errata python -m errata.trainer --skip-degenerate-boxes`, then retrain and activate — human corrections are never touched |
 
 ---
 

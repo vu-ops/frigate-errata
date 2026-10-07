@@ -208,11 +208,6 @@ See [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) for the full reference:
 every config key, environment variables, DB schema, API reference, and
 troubleshooting.
 
-## Upgrading
-
-See [`UPGRADE.md`](UPGRADE.md) for in-place upgrades that preserve `data/` and
-`models/`.
-
 ## License
 
 MIT — see [`LICENSE`](LICENSE).
