@@ -7,7 +7,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE: ghcr.io/${{ github.repository }}
+  IMAGE_BASE: ghcr.io/${{ github.repository }}
 
 jobs:
   build-xpu:
@@ -46,6 +46,6 @@ jobs:
           build-args: |
             GPU_TYPE=xpu
             VERSION=${{ steps.version.outputs.version }}
-          tags: ${{ env.IMAGE }}:${{ steps.version.outputs.tag }}
+          tags: ${{ env.IMAGE_BASE }}-xpu:${{ steps.version.outputs.tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
