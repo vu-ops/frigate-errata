@@ -39,6 +39,14 @@ Frigate API ──▶ harvester ──▶ SQLite ──▶ analyzer ──▶ re
      times within `analysis.noise.window_hours`.
    Events below `harvest.min_confidence` are auto-ignored; `analysis.safe_labels`
    (person, car, ...) skip the description check.
+
+   Auto-confirmation depends on Frigate GenAI descriptions: with
+   `analysis.confirm_on_coherent_description`, a detection that would otherwise
+   be flagged for low confidence or noise is auto-confirmed only when its GenAI
+   description mentions the label (or a synonym), and training pseudo-labels
+   are drawn from those same coherent descriptions. Without GenAI descriptions,
+   no event is auto-confirmed by description — flagged detections stay in the
+   review queue.
 3. **Review** — open the dashboard, confirm the detection, pick the correct
    label, or mark it a false positive. Camera/Label/Reason filters narrow the
    queue, and **Apply to matching** bulk-applies a status. Already-reviewed
@@ -62,6 +70,12 @@ Frigate API ──▶ harvester ──▶ SQLite ──▶ analyzer ──▶ re
 Prerequisites: Docker + Docker Compose on the Frigate host, and a running
 Frigate (0.14+; developed and tested against 0.18) reachable from the Errata
 container by container name on a shared compose network.
+
+Frigate 0.16+ GenAI descriptions are **required for description-based
+auto-confirm** (`analysis.confirm_on_coherent_description`), for mismatch
+detection, and for training pseudo-labels. Without them Errata still works via
+the low-confidence and noise rules, but flagged detections are never
+auto-confirmed by description and wait in the review queue for a human.
 
 1. **Place the project** anywhere on the Frigate host, e.g. `/opt/errata-app`.
 2. **Credentials** — if Frigate has authentication enabled (0.16+), create
@@ -182,8 +196,11 @@ PyTorch falls back to CPU at runtime.
   `review.auto_keep_per_label` most-recent per label; false positives are kept
   forever. Pending and skipped events are never pruned.
 - `config.yaml` changes require `docker compose restart errata`.
-- Errata's mismatch rule reads Frigate GenAI event descriptions; without GenAI
-  it still works via the low-confidence and noise rules.
+- Errata's mismatch and auto-confirm rules read Frigate GenAI event
+  descriptions. GenAI is required for description-based auto-confirm
+  (`analysis.confirm_on_coherent_description`) and for training pseudo-labels;
+  without it Errata still flags low-confidence and noise events, but nothing
+  self-confirms on description and every flagged detection waits for review.
 
 ## Configuration
 
