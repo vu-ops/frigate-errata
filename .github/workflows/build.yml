@@ -46,6 +46,17 @@ jobs:
           build-args: |
             GPU_TYPE=xpu
             VERSION=${{ steps.version.outputs.version }}
-          tags: ${{ env.IMAGE_BASE }}-xpu:${{ steps.version.outputs.tag }}
+          tags: |
+            ${{ env.IMAGE_BASE }}-xpu:${{ steps.version.outputs.tag }}
+            ${{ env.IMAGE_BASE }}-xpu:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Make package public
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api --method PATCH \
+            -H "Accept: application/vnd.github+json" \
+            /user/packages/container/frigate-errata-xpu \
+            -f visibility=public
