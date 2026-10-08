@@ -20,6 +20,7 @@ DEFAULTS: dict = {
         "request_timeout": 30,
         "snapshot_dir": "/data/snapshots",
         "config_path": "",
+        "backup_keep": 5,
     },
     "harvest": {
         "interval_minutes": 30,
@@ -649,7 +650,7 @@ DEFAULTS: dict = {
         "dataset_dir": "/data/dataset",
         "model_output_dir": "/data/models",
         "publish_dir": "/publish",
-        "keep_versions": 3,
+        "keep_versions": 20,
         "model_type": "yolo11n",
         "epochs": 100,
         "imgsz": 640,

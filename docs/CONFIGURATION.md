@@ -41,6 +41,10 @@ frigate:
   snapshot_dir: "/data/snapshots"  # where event snapshots are stored
   config_path: ""                  # optional local path to frigate config.yml
                                    # (unused by default; API is used instead)
+  backup_dir: "/data/frigate-config-backups"  # Frigate config backups
+  backup_keep: 5                   # keep the N most recent config backups
+                                   # (files + DB rows); older ones are pruned
+                                   # whenever a new backup is written (0 = keep all)
 
 harvest:
   interval_minutes: 30             # scheduler loop interval
@@ -176,7 +180,7 @@ training:
   dataset_dir: "/data/dataset"     # exported YOLO dataset
   model_output_dir: "/data/models" # intermediate training artifacts
   publish_dir: "/publish"          # host models/ dir (mounted into Frigate)
-  keep_versions: 3                 # how many published models to retain
+  keep_versions: 20                # how many published models to retain
   model_type: "yolo11n"            # ultralytics base model
   epochs: 100
   imgsz: 640

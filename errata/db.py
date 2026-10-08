@@ -409,6 +409,26 @@ class Database:
                 (backup_id,),
             ).fetchone()
 
+    def frigate_backups_prune(self, keep: int) -> list[str]:
+        """Delete config-backup rows beyond the newest `keep`; return their files.
+
+        A keep of 0 or less disables pruning and leaves every backup in place.
+        """
+        if keep <= 0:
+            return []
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT id, file_path FROM frigate_backups ORDER BY created_at DESC"
+            ).fetchall()
+            stale = rows[keep:]
+            if not stale:
+                return []
+            conn.executemany(
+                "DELETE FROM frigate_backups WHERE id = ?",
+                [(row["id"],) for row in stale],
+            )
+        return [row["file_path"] for row in stale]
+
     def prune_candidates(self, keep_per_label: int) -> list[sqlite3.Row]:
         with self.connect() as conn:
             return conn.execute(

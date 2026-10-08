@@ -412,6 +412,11 @@ def backup_frigate_config(cfg: dict, db: Database, reason: str) -> tuple[int, st
     path = backup_dir / f"config-{stamp}-{reason}.yml"
     path.write_text(text)
     backup_id = db.frigate_backup_insert(time.time(), reason, active, str(path))
+    keep = int(cfg["frigate"].get("backup_keep", 5))
+    for stale_path in db.frigate_backups_prune(keep):
+        if stale_path:
+            Path(stale_path).unlink(missing_ok=True)
+        logger.info("pruned old frigate config backup %s", stale_path)
     logger.info("backed up frigate config to %s (active model: %s)", path, active or "unknown")
     return backup_id, str(path)
 

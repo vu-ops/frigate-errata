@@ -5,6 +5,9 @@ frigate:
   snapshot_dir: "/data/snapshots"
   config_path: ""
   backup_dir: "/data/frigate-config-backups"
+  backup_keep: 5                    # keep the N most recent Frigate config
+                                    # backups (files + DB rows); older ones are
+                                    # pruned whenever a new backup is written
   published_model_prefix: "/config/models/published"
 
 harvest:
