@@ -6,7 +6,7 @@ import re
 import time
 
 from .db import Database
-from .geometry import is_plausible_box
+from .geometry import is_oversized_box, is_plausible_box
 from .vocab import label_in_text
 
 logger = logging.getLogger(__name__)
@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 PRIORITY_MISMATCH_HIGH = 4
 PRIORITY_MISMATCH = 3
 PRIORITY_NOISE = 2
+PRIORITY_OVERSIZED = 2
 PRIORITY_LOW_CONFIDENCE = 1
 
 
@@ -28,6 +29,9 @@ class Analyzer:
         self.auto_skip_implausible = bool(
             analysis.get("auto_skip_implausible_boxes", True)
         )
+        oversized_cfg = analysis.get("oversized_box", {}) or {}
+        self.oversized_enabled = bool(oversized_cfg.get("enabled", True))
+        self.oversized_max_area = float(oversized_cfg.get("max_area", 0.4))
         self.safe_labels = set(analysis["safe_labels"])
         self.file_synonyms = dict(analysis.get("synonyms", {}) or {})
         self.synonyms = dict(self.file_synonyms)
@@ -50,14 +54,15 @@ class Analyzer:
                 logger.warning("invalid synonyms_override in database, using file synonyms")
         self.synonyms = dict(self.file_synonyms)
 
-    def run(self) -> dict:
+    def run(self, statuses: tuple[str, ...] = ("new",)) -> dict:
         self._refresh_synonyms()
-        rows = self.db.pending_new()
+        rows = self.db.pending_for_analysis(statuses)
         stats = {
             "scanned": len(rows),
             "mismatch": 0,
             "low_confidence": 0,
             "noise": 0,
+            "oversized": 0,
             "ignored": 0,
             "confirmed": 0,
             "skipped": 0,
@@ -131,6 +136,14 @@ class Analyzer:
                 else:
                     priority = PRIORITY_MISMATCH
                 suggestion = self._suggest_labels(label, description)
+
+        # Oversized boxes (e.g. one box spanning two parked cars, common in IR
+        # night frames) are geometrically legal but usually merged detections.
+        # Never auto-confirm them; surface them for human review instead.
+        if reason is None and self.oversized_enabled:
+            if is_oversized_box(row["box"], self.oversized_max_area):
+                reason = "oversized"
+                priority = PRIORITY_OVERSIZED
 
         if reason is None and confidence is not None and confidence < self.low_confidence_threshold:
             if not (self.confirm_on_coherent and description_confirms):

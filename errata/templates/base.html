@@ -32,6 +32,7 @@ button.warn { background: #7a2e2e; border-color: #8f3b3b; color: #fff; }
 .badge.mismatch { background: #4a1f1f; color: #ff9d9d; border-color: #7a2e2e; }
 .badge.low_confidence { background: #46351a; color: #ffd58a; border-color: #6d5424; }
 .badge.noise { background: #1c3350; color: #9ec1ff; border-color: #2b4a73; }
+.badge.oversized { background: #46321c; color: #ffc49d; border-color: #7a4a2e; }
 .badge.suggest { background: #3d2b4f; color: #d0b3ff; border-color: #5c4273; }
 .badge.status { background: #2b2f3a; color: #c9d1e0; border-color: #3a4152; }
 .badge.corrected { background: #1d2b22; color: #a8e6b8; border-color: #2f5233; }
@@ -40,6 +41,7 @@ button.warn { background: #7a2e2e; border-color: #8f3b3b; color: #fff; }
 .chip { border-radius: 99px; font-size: 0.8rem; font-weight: 600; padding: 0.25rem 0.75rem; }
 .chip.detected { background: #20303f; color: #a8d3ff; border: 1px solid #2e4a63; }
 .chip.suggest { background: #3d2b4f; color: #d0b3ff; border: 1px solid #5c4273; }
+.chip.edit { background: #3a2f1c; color: #ffc49d; border: 1px solid #6d5424; }
 .badge.label { background: #20303f; color: #a8d3ff; border-color: #2e4a63; }
 .badge.camera { background: #1d2b22; color: #a8e6b8; border-color: #2f5233; }
 .desc { font-size: 0.9rem; margin: 0; color: #c9d1e0; flex: 1; line-height: 1.4; }
@@ -68,6 +70,25 @@ img.zoom { cursor: zoom-in; }
 details { margin-top: 0.35rem; }
 details summary { cursor: pointer; color: #9fb4ff; font-size: 0.8rem; }
 details table { margin: 0.4rem 0 0.2rem; }
+#boxeditor { position: fixed; inset: 0; background: rgba(5, 7, 10, 0.92); display: flex; align-items: center; justify-content: center; z-index: 110; }
+#boxeditor[hidden] { display: none; }
+.be-panel { background: #161a22; border: 1px solid #232833; border-radius: 10px; padding: 1rem; display: flex; flex-direction: column; gap: 0.7rem; max-width: 96vw; max-height: 96vh; }
+.be-head { font-size: 0.85rem; color: #c9d1e0; }
+.be-stage { position: relative; user-select: none; touch-action: none; cursor: crosshair; align-self: center; line-height: 0; }
+.be-stage img { display: block; max-width: 92vw; max-height: 70vh; }
+.be-box { position: absolute; border: 2px solid #00dcff; background: rgba(0, 220, 255, 0.08); box-sizing: border-box; cursor: move; }
+.be-box[hidden] { display: none; }
+.be-h { position: absolute; width: 12px; height: 12px; margin: -6px 0 0 -6px; background: #00dcff; border: 1px solid #0a0c10; border-radius: 2px; }
+.be-h[data-dir="nw"] { left: 0; top: 0; cursor: nwse-resize; }
+.be-h[data-dir="n"] { left: 50%; top: 0; cursor: ns-resize; }
+.be-h[data-dir="ne"] { left: 100%; top: 0; cursor: nesw-resize; }
+.be-h[data-dir="e"] { left: 100%; top: 50%; cursor: ew-resize; }
+.be-h[data-dir="se"] { left: 100%; top: 100%; cursor: nwse-resize; }
+.be-h[data-dir="s"] { left: 50%; top: 100%; cursor: ns-resize; }
+.be-h[data-dir="sw"] { left: 0; top: 100%; cursor: nesw-resize; }
+.be-h[data-dir="w"] { left: 0; top: 50%; cursor: ew-resize; }
+.be-actions { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+.be-actions select { min-width: 9rem; }
 </style>
 </head>
 <body>
@@ -86,6 +107,26 @@ details table { margin: 0.4rem 0 0.2rem; }
 {% block content %}{% endblock %}
 </main>
 <div id="lightbox" hidden><img id="lightbox-img" alt="snapshot preview"></div>
+<div id="boxeditor" hidden>
+  <div class="be-panel">
+    <div class="be-head">Adjust the training box — drag the box to move it, drag a corner/edge handle to resize, or drag on empty image space to draw a new box. The saved box is what the model learns from.</div>
+    <div class="be-stage" id="be-stage">
+      <img id="be-img" alt="clean snapshot">
+      <div class="be-box" id="be-box" hidden>
+        <span class="be-h" data-dir="nw"></span><span class="be-h" data-dir="n"></span><span class="be-h" data-dir="ne"></span><span class="be-h" data-dir="e"></span><span class="be-h" data-dir="se"></span><span class="be-h" data-dir="s"></span><span class="be-h" data-dir="sw"></span><span class="be-h" data-dir="w"></span>
+      </div>
+    </div>
+    <form id="be-form" method="post" class="be-actions">
+      <input type="hidden" name="action" value="confirm">
+      <input type="hidden" name="box" id="be-box-input">
+      <input type="hidden" name="return_to" id="be-return-to">
+      <label>Label <select name="label" id="be-label"></select></label>
+      <button class="primary" type="submit">Save correction</button>
+      <button class="warn" type="button" id="be-fp">Save as false positive</button>
+      <button type="button" id="be-cancel">Cancel</button>
+    </form>
+  </div>
+</div>
 <script>
 const lightbox = document.getElementById('lightbox');
 const lightboxImg = document.getElementById('lightbox-img');
@@ -181,6 +222,129 @@ async function startTrain(btn) {
     const s = await (await fetch('{{ base }}/api/train/status')).json();
     if (s.running) { sawRunning = true; showTraining(s); ensureTrainPoll(); }
   } catch (e) {}
+})();
+
+(function initBoxEditor() {
+  const BASE = '{{ base }}';
+  const LABELS = {{ (labels if labels is defined else []) | tojson }};
+  const editor = document.getElementById('boxeditor');
+  if (!editor) return;
+  const stage = document.getElementById('be-stage');
+  const img = document.getElementById('be-img');
+  const boxEl = document.getElementById('be-box');
+  const boxInput = document.getElementById('be-box-input');
+  const form = document.getElementById('be-form');
+  const labelSel = document.getElementById('be-label');
+  const returnInput = document.getElementById('be-return-to');
+  const actionInput = form.querySelector('input[name="action"]');
+  const MIN = 0.01;
+  let box = null, mode = null, start = null;
+
+  function clampBox(b) {
+    const x = Math.min(Math.max(b.x, 0), 1);
+    const y = Math.min(Math.max(b.y, 0), 1);
+    const w = Math.min(Math.max(b.w, 0), 1 - x);
+    const h = Math.min(Math.max(b.h, 0), 1 - y);
+    return { x: x, y: y, w: w, h: h };
+  }
+  function draw() {
+    const r = img.getBoundingClientRect();
+    if (!box || box.w <= 0 || box.h <= 0 || !r.width || !r.height) { boxEl.hidden = true; return; }
+    boxEl.hidden = false;
+    boxEl.style.left = (box.x * r.width) + 'px';
+    boxEl.style.top = (box.y * r.height) + 'px';
+    boxEl.style.width = (box.w * r.width) + 'px';
+    boxEl.style.height = (box.h * r.height) + 'px';
+  }
+  function rel(e) {
+    const r = img.getBoundingClientRect();
+    return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+  }
+  function close() { editor.hidden = true; img.src = ''; box = null; mode = null; start = null; }
+  function open(btn) {
+    box = null;
+    const raw = btn.dataset.box || '';
+    if (raw) {
+      try {
+        const b = JSON.parse(raw);
+        if (b && b.length === 4) box = { x: +b[0], y: +b[1], w: +b[2], h: +b[3] };
+      } catch (e) {}
+    }
+    labelSel.innerHTML = '';
+    const wanted = btn.dataset.defaultLabel || btn.dataset.label || '';
+    const list = LABELS.slice();
+    if (btn.dataset.label && list.indexOf(btn.dataset.label) < 0) list.push(btn.dataset.label);
+    list.forEach(function (l) {
+      const o = document.createElement('option');
+      o.value = l; o.textContent = l;
+      if (l === wanted) o.selected = true;
+      labelSel.appendChild(o);
+    });
+    form.action = BASE + '/review/' + btn.dataset.event;
+    returnInput.value = btn.dataset.returnTo || '';
+    img.onload = draw;
+    img.src = BASE + '/api/snapshots/' + btn.dataset.event + '/clean.jpg';
+    editor.hidden = false;
+    draw();
+  }
+  window.openBoxEditor = open;
+  window.closeBoxEditor = close;
+
+  stage.addEventListener('pointerdown', function (e) {
+    if (e.button !== undefined && e.button !== 0) return;
+    const p = rel(e);
+    if (e.target.classList && e.target.classList.contains('be-h')) {
+      mode = e.target.dataset.dir;
+    } else if (boxEl.contains(e.target)) {
+      mode = 'move';
+    } else {
+      box = { x: p.x, y: p.y, w: 0, h: 0 };
+      mode = 'se';
+      draw();
+    }
+    start = { x: p.x, y: p.y, box: Object.assign({}, box) };
+    stage.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  stage.addEventListener('pointermove', function (e) {
+    if (!mode || !start) return;
+    const p = rel(e), s = start.box;
+    let b;
+    if (mode === 'move') {
+      b = { x: s.x + (p.x - start.x), y: s.y + (p.y - start.y), w: s.w, h: s.h };
+    } else {
+      const x1 = s.x, y1 = s.y, x2 = s.x + s.w, y2 = s.y + s.h;
+      let nx1 = x1, ny1 = y1, nx2 = x2, ny2 = y2;
+      if (mode.indexOf('w') >= 0) nx1 = p.x;
+      if (mode.indexOf('e') >= 0) nx2 = p.x;
+      if (mode.indexOf('n') >= 0) ny1 = p.y;
+      if (mode.indexOf('s') >= 0) ny2 = p.y;
+      b = { x: Math.min(nx1, nx2), y: Math.min(ny1, ny2), w: Math.abs(nx2 - nx1), h: Math.abs(ny2 - ny1) };
+    }
+    box = clampBox(b);
+    draw();
+  });
+  function endDrag() { mode = null; start = null; }
+  stage.addEventListener('pointerup', endDrag);
+  stage.addEventListener('pointercancel', endDrag);
+
+  function commit(action) {
+    if (!box || box.w < MIN || box.h < MIN) {
+      alert('Draw a box on the image first.');
+      return false;
+    }
+    boxInput.value = JSON.stringify([+box.x.toFixed(6), +box.y.toFixed(6), +box.w.toFixed(6), +box.h.toFixed(6)]);
+    actionInput.value = action;
+    return true;
+  }
+  form.addEventListener('submit', function (e) { if (!commit('confirm')) e.preventDefault(); });
+  document.getElementById('be-fp').addEventListener('click', function () {
+    if (commit('false_positive')) form.submit();
+  });
+  document.getElementById('be-cancel').addEventListener('click', close);
+  editor.addEventListener('click', function (e) { if (e.target === editor) close(); });
+  window.addEventListener('resize', draw);
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !editor.hidden) close(); });
 })();
 
 </script>

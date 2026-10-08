@@ -13,7 +13,7 @@ from pathlib import Path
 from .config import load_config, setup_logging
 from .db import Database
 from .frigate_client import FrigateClient
-from .geometry import is_plausible_box
+from .geometry import is_oversized_box, is_plausible_box
 from .vocab import effective_synonyms, label_in_text
 
 logger = logging.getLogger(__name__)
@@ -25,6 +25,9 @@ def _select_pseudo_labels(cfg: dict, db: Database, class_map: dict) -> list:
         return []
     per_day = int(pseudo_cfg.get("per_camera_label_day", 3))
     max_per_class = int(pseudo_cfg.get("max_per_class", 250))
+    oversized_cfg = cfg["analysis"].get("oversized_box", {}) or {}
+    oversized_enabled = bool(oversized_cfg.get("enabled", True))
+    oversized_max_area = float(oversized_cfg.get("max_area", 0.4))
     synonyms = effective_synonyms(cfg, db)
     with db.connect() as conn:
         rows = conn.execute(
@@ -40,6 +43,8 @@ def _select_pseudo_labels(cfg: dict, db: Database, class_map: dict) -> list:
         if label not in class_map:
             continue
         if not is_plausible_box(row["box"]):
+            continue
+        if oversized_enabled and is_oversized_box(row["box"], oversized_max_area):
             continue
         if per_class.get(label, 0) >= max_per_class:
             continue
@@ -813,6 +818,11 @@ def main() -> None:
         action="store_true",
         help="set status 'skipped' on events with degenerate boxes (human corrections are left untouched)",
     )
+    parser.add_argument(
+        "--reanalyze-confirmed",
+        action="store_true",
+        help="re-run the analyzer on auto-confirmed events so new or changed analysis rules apply to the existing backlog (human-reviewed events are untouched)",
+    )
     parser.add_argument("--train", action="store_true", help="train a model (requires ultralytics)")
     args = parser.parse_args()
 
@@ -829,6 +839,13 @@ def main() -> None:
 
     if args.skip_degenerate_boxes:
         skip_degenerate_boxes(db)
+        return
+
+    if args.reanalyze_confirmed:
+        from .analyzer import Analyzer
+
+        stats = Analyzer(cfg, db).run(statuses=("confirmed",))
+        logger.info("reanalysis of confirmed events complete: %s", stats)
         return
 
     if args.refresh_snapshots:

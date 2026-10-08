@@ -100,6 +100,13 @@
           <button class="chip suggest" title="Confirm as suggested label">{{ s }}</button>
         </form>
         {% endfor %}
+        <button type="button" class="chip edit" title="Draw or adjust the box that this correction trains on"
+                onclick="openBoxEditor(this)"
+                data-event="{{ row.id }}"
+                data-box="{{ row.box or '' }}"
+                data-label="{{ row.label }}"
+                data-default-label="{{ default_label }}"
+                data-return-to="{{ return_to }}">Edit box</button>
       </div>
       <form class="actions" method="post" action="{{ base }}/review/{{ row.id }}">
         <input type="hidden" name="return_to" value="{{ return_to }}">
@@ -139,6 +146,13 @@
   there (only when no other object of interest is in frame), or <b>Skip</b> to
   set it aside entirely. Corrections accumulate until the retrain threshold —
   see Summary for progress.
+  <br>
+  <b>Edit box:</b> click <b>Edit box</b> on any card to open the snapshot and
+  move, resize, or draw the detection box. The box you save is what the
+  correction trains on — use it to tighten a merged/oversized detection or to
+  box an object the detector missed. <b>Save correction</b> stores the label +
+  box; <b>Save as false positive</b> uses the drawn region as the background
+  crop.
   <br>
   <b>Review past decisions:</b> use the <b>View</b> filter to show
   <i>Corrected</i>, <i>False positive</i>, <i>Auto-confirmed</i>, <i>Ignored</i>,

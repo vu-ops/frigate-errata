@@ -29,7 +29,7 @@ Frigate API ──▶ harvester ──▶ SQLite ──▶ analyzer ──▶ re
 1. **Harvest** — every `harvest.interval_minutes` (default 30), pull completed
    events from the Frigate API since the last processed timestamp (resumable),
    download clean snapshots (no detection overlay), and store them in SQLite.
-2. **Analyze** — flag events for review with three rules:
+2. **Analyze** — flag events for review with four rules:
    - `mismatch`: vocabulary coherence — the detector label doesn't appear in the
      GenAI event description (e.g. label `cat`, description "gray raccoon").
      High-confidence mismatches sort first.
@@ -37,6 +37,10 @@ Frigate API ──▶ harvester ──▶ SQLite ──▶ analyzer ──▶ re
      `analysis.low_confidence_threshold`.
    - `noise`: the same camera + label firing more than `analysis.noise.count`
      times within `analysis.noise.window_hours`.
+   - `oversized`: the box covers more than `analysis.oversized_box.max_area` of
+     the frame (merged detections, e.g. two cars under one box in IR night
+     frames). Oversized events are never auto-confirmed and never become
+     training pseudo-labels.
    Events below `harvest.min_confidence` are auto-ignored; `analysis.safe_labels`
    (person, car, ...) skip the description check.
 
@@ -48,9 +52,11 @@ Frigate API ──▶ harvester ──▶ SQLite ──▶ analyzer ──▶ re
    no event is auto-confirmed by description — flagged detections stay in the
    review queue.
 3. **Review** — open the dashboard, confirm the detection, pick the correct
-   label, or mark it a false positive. Camera/Label/Reason filters narrow the
-   queue, and **Apply to matching** bulk-applies a status. Already-reviewed
-   events can be reopened, re-labelled, or sent back to the queue.
+   label, or mark it a false positive. **Edit box** opens any event's snapshot so
+   you can move, resize, or draw the box the correction trains on. Camera/Label/
+   Reason filters narrow the queue, and **Apply to matching** bulk-applies a
+   status. Already-reviewed events can be reopened, re-labelled, or sent back to
+   the queue.
 4. **Train** — once enough corrections accumulate (`training.trigger_threshold`,
    default 50), build a YOLO dataset and train; see below.
 
@@ -58,7 +64,8 @@ Frigate API ──▶ harvester ──▶ SQLite ──▶ analyzer ──▶ re
 
 - Automated review queue with priority ordering
 - Synonym-aware label/description mismatch detection (configurable per class)
-- Noise-burst and low-confidence detection
+- Noise-burst, low-confidence, and oversized/merged-box detection
+- In-browser box editor: move, resize, or draw the training box on any event
 - Three training paths: in-app button, CLI, or a Mac/Colab kit
 - Optional automatic deployment of the trained model into Frigate's config
   (with backup + rollback)

@@ -35,6 +35,10 @@ DEFAULTS: dict = {
         "low_confidence_threshold": 0.75,
         "confirm_on_coherent_description": True,
         "auto_skip_implausible_boxes": True,
+        "oversized_box": {
+            "enabled": True,
+            "max_area": 0.4,
+        },
         "safe_labels": ["person", "car", "truck", "bicycle"],
         "synonyms": {
             "person": [

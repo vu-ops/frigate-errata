@@ -17,6 +17,23 @@ def parse_box(box) -> tuple[float, float, float, float] | None:
     return x, y, w, h
 
 
+def is_oversized_box(box, max_area: float) -> bool:
+    """True when a box covers more than `max_area` of the frame (as a fraction).
+
+    Unlike the degenerate slivers caught by is_plausible_box, an oversized box is
+    geometrically legal — it is typically a merged detection (two adjacent cars
+    under IR at night) or a whole-frame hallucination. Those should be flagged
+    for human review, never auto-confirmed or used as training targets.
+    """
+    parsed = parse_box(box)
+    if parsed is None:
+        return False
+    x, y, w, h = parsed
+    if w <= 0 or h <= 0:
+        return False
+    return w * h > max_area
+
+
 def is_plausible_box(box, min_side: float = MIN_SIDE, max_aspect: float = MAX_ASPECT) -> bool:
     """Reject degenerate detector boxes (e.g. a full-width sliver at the frame edge).
 

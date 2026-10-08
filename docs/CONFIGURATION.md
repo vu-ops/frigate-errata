@@ -71,6 +71,17 @@ analysis:
                                    # instead of queuing them for review. Set
                                    # false to fall back to flagging them as
                                    # noise in the review queue.
+   oversized_box:                  # boxes covering an unusually large fraction
+     enabled: true                 # of the frame are usually merged detections
+     max_area: 0.4                 # (e.g. two adjacent cars under one box in IR
+                                   # night frames) or whole-frame hallucinations.
+                                   # When the box area exceeds max_area (frame
+                                   # fraction) the event is flagged as `oversized`
+                                   # for review instead of being auto-confirmed,
+                                   # and is excluded from training pseudo-labels.
+                                   # A single large object close to the camera can
+                                   # trip this too — confirming it in the queue
+                                   # trains the model on the big box as-is.
   synonyms:                        # words that count as a label match in
     person:                        # descriptions. Purely data-driven: edit
       - man                        # this list to teach the vocabulary check,
@@ -239,11 +250,16 @@ For every unprocessed event (newest first):
    - match → the VLM independently confirms the detection; if
      `confirm_on_coherent_description` is on, low-confidence
      flagging is skipped (no review needed for an agreed label).
-4. `low_confidence` — `confidence < low_confidence_threshold`, unless
+4. `oversized` — box area exceeds `oversized_box.max_area` (frame fraction).
+   Geometrically legal but usually a merged detection (two adjacent cars under
+   one box, common in IR night frames). Priority 2, unless suppressed by the
+   confirmation above. Use `python -m errata.trainer --reanalyze-confirmed` to
+   apply this rule retroactively to already auto-confirmed events.
+5. `low_confidence` — `confidence < low_confidence_threshold`, unless
    suppressed by the confirmation above. Priority 1.
-5. `noise` — same camera + label appears `count` times inside
+6. `noise` — same camera + label appears `count` times inside
    `window_hours`. Priority 2.
-6. Otherwise → status `confirmed` (nothing to review).
+7. Otherwise → status `confirmed` (nothing to review).
 
 The review queue is ordered by priority (high first), then newest.
 
@@ -345,14 +361,15 @@ else to do. Otherwise create a wrapper unit or just use
 | Route | Purpose |
 |---|---|
 | `GET /errata/` | Review queue. The `View` dropdown selects the status to show (`pending`, `corrected`, `false_positive`, `confirmed`, `ignored`, `skipped`, `all`); camera/label/reason filters narrow the list. `Set status` + Apply is the bulk action, see `POST /errata/bulk` |
-| `POST /errata/review/{id}` | Actions: `confirm` (+ `label`) records the selected label as a correction, `false_positive` marks noise, `skip` sets the event aside (status `skipped`, never used for training), `reset` undoes a review (drops the correction and returns the event to `pending`). An optional `return_to` querystring keeps the current filters/View after the action |
+| `POST /errata/review/{id}` | Actions: `confirm` (+ `label`) records the selected label as a correction, `false_positive` marks noise, `skip` sets the event aside (status `skipped`, never used for training), `reset` undoes a review (drops the correction and returns the event to `pending`). An optional `box` (JSON `[x,y,w,h]`, frame-relative, clamped/validated) overrides the stored detection box for `confirm`/`false_positive` — this is what the card's **Edit box** editor posts. An optional `return_to` querystring keeps the current filters/View after the action |
 | `POST /errata/bulk` | Bulk-apply a target status (`skipped`, `confirmed`, `false_positive`, `ignored`) to every pending event matching the `camera` / `label` / `reason` filters |
 | `GET /errata/summary` | Stats: statuses, corrections by camera/label, retrain progress, model versions, and the on-disk dataset the trainer consumes (human vs pseudo labels, backgrounds, per-class counts) |
 | `GET /errata/synonyms` | View/edit label synonyms (saved as a DB override, applied on next analyzer run) |
 | `POST /errata/synonyms` | Save the synonym form (comma-separated per label) |
 | `POST /errata/synonyms/reset` | Discard overrides, fall back to the config.yaml baseline |
 | `GET /errata/api/queue.json` | Export queue as JSON |
-| `GET /errata/api/snapshots/{id}.jpg` | Stored snapshot (click a queue image to enlarge) |
+| `GET /errata/api/snapshots/{id}.jpg` | Stored snapshot with the detection box burned in (click a queue image to enlarge) |
+| `GET /errata/api/snapshots/{id}/clean.jpg` | The stored snapshot without the burned-in box, used by the **Edit box** editor |
 | `GET /errata/api/health` | Liveness + last scheduler stats |
 | `POST /errata/api/run-now` | Trigger an immediate harvest+analyze cycle (also a "Fetch latest" button in the header) |
 | `POST /errata/api/train` | Start a training run in the container background (also a "Train" button in the header). Re-exports the dataset first, then trains with the device from `training.device` (xpu with CPU fallback). 409 if already running, 503 if the image lacks ultralytics |
@@ -363,6 +380,17 @@ else to do. Otherwise create a wrapper unit or just use
 | `GET /errata/api/train/status` | Training job state (running / finished / error + detail); also shown on the Summary page |
 | `GET /errata/api/train/mac-kit.zip` | Download the Mac training kit: dataset, source files, `train-mac.sh`, and a README with Homebrew setup; refreshes the dataset export first. Also linked as "Mac kit" in the header |
 | `GET /healthz` | Unprefixed health endpoint (used by the Docker healthcheck) |
+
+### Editing the detection box
+
+Every card has an **Edit box** button. It opens the clean snapshot with the
+detection box overlaid; drag the box to move it, drag a corner/edge handle to
+resize, or drag on empty image space to draw a new box. **Save correction**
+stores the chosen label paired with the edited box, and **Save as false
+positive** stores the drawn region as a background crop. The saved box is what
+the exported YOLO label uses, so a correction can fix a merged/oversized box or
+add a tightly-drawn object the detector missed. Boxes are clamped to the frame;
+a box smaller than 1% of a side is rejected.
 
 ### Reviewing past decisions
 
@@ -398,7 +426,7 @@ SQLite, WAL mode.
   `description` (GenAI), `attributes` (JSON), `start_time`, `end_time`,
   `box` (JSON `[x,y,w,h]` at detect resolution), `snapshot_path`,
   `status` (`new → flagged → corrected|confirmed|false_positive|ignored`),
-  `flag_reason` (`mismatch|low_confidence|noise`), `priority`,
+  `flag_reason` (`mismatch|low_confidence|noise|oversized`), `priority`,
   `created_at`, `reviewed_at`.
 - **corrections** — one row per user correction: `event_id`, `image_path`,
   `correct_label` (target class or `false_positive`), `original_label`,
@@ -528,6 +556,7 @@ manually (or cron it).
 | Logs | `docker logs -f errata` |
 | DB inspect | `sqlite3 data/errata.db 'select status, count(*) from events group by status;'` |
 | Degenerate-box artifact | Full-width, few-pixels-tall boxes at the frame bottom (wide cameras). Check: `docker exec errata python -m errata.trainer --check-boxes` (read-only). Fix: `docker exec errata python -m errata.trainer --skip-degenerate-boxes`, then retrain and activate — human corrections are never touched |
+| Merged/oversized boxes (e.g. two cars under one box at night) | Flagged as `oversized` in the review queue; they are never auto-confirmed and never become training pseudo-labels. Confirm correct events manually, or lower `analysis.oversized_box.max_area`. For events already auto-confirmed before the rule existed: `docker exec errata python -m errata.trainer --reanalyze-confirmed`, then retrain |
 
 ---
 

@@ -41,7 +41,7 @@ REVIEW_STATUSES = [
     "all",
 ]
 
-FLAG_REASONS = ["mismatch", "low_confidence", "noise"]
+FLAG_REASONS = ["mismatch", "low_confidence", "noise", "oversized"]
 
 REVIEWED_STATUSES = {"corrected", "false_positive", "confirmed", "ignored", "skipped"}
 
@@ -240,7 +240,23 @@ def create_app(config: dict) -> FastAPI:
             status_code=303,
         )
 
-    def apply_review(row, action: str, label: str = "") -> str:
+    def _parse_box_form(raw: str) -> str | None:
+        """Validate a client-supplied box (JSON [x, y, w, h], frame-relative)."""
+        if not raw or not raw.strip():
+            return None
+        try:
+            x, y, w, h = (float(v) for v in json.loads(raw))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="invalid box: expected JSON [x, y, w, h]")
+        x = min(max(x, 0.0), 1.0)
+        y = min(max(y, 0.0), 1.0)
+        w = min(max(w, 0.0), 1.0 - x)
+        h = min(max(h, 0.0), 1.0 - y)
+        if w < 0.01 or h < 0.01:
+            raise HTTPException(status_code=400, detail="box too small after clamping")
+        return json.dumps([round(x, 6), round(y, 6), round(w, 6), round(h, 6)])
+
+    def apply_review(row, action: str, label: str = "", box_override: str | None = None) -> str:
         event_id = row["id"]
         if action == "confirm":
             new_label = label.strip()
@@ -255,7 +271,7 @@ def create_app(config: dict) -> FastAPI:
                     "original_label": row["label"],
                     "confidence": row["confidence"],
                     "camera": row["camera"],
-                    "box": row["box"],
+                    "box": box_override or row["box"],
                 }
             )
             db.set_status(event_id, "corrected", reviewed=True)
@@ -270,7 +286,7 @@ def create_app(config: dict) -> FastAPI:
                     "original_label": row["label"],
                     "confidence": row["confidence"],
                     "camera": row["camera"],
-                    "box": row["box"],
+                    "box": box_override or row["box"],
                 }
             )
             db.set_status(event_id, "false_positive", reviewed=True)
@@ -293,12 +309,13 @@ def create_app(config: dict) -> FastAPI:
         event_id: str,
         action: str = Form(...),
         label: str = Form(""),
+        box: str = Form(""),
         return_to: str = Form(""),
     ):
         row = db.get_event(event_id)
         if row is None:
             raise HTTPException(status_code=404, detail="event not found")
-        msg = apply_review(row, action, label)
+        msg = apply_review(row, action, label, _parse_box_form(box))
         params = dict(parse_qsl(return_to, keep_blank_values=True))
         params.pop("msg", None)
         params["msg"] = msg
@@ -385,20 +402,43 @@ def create_app(config: dict) -> FastAPI:
             logger.exception("failed to annotate snapshot %s", path)
             return None
 
-    @router.get("/api/snapshots/{event_id}.jpg")
-    def snapshot(event_id: str):
+    def _snapshot_or_404(event_id: str) -> str:
         row = db.get_event(event_id)
         if row is None:
             raise HTTPException(status_code=404, detail="event not found")
         path = row["snapshot_path"]
-        if path and Path(path).is_file():
-            no_cache = {"Cache-Control": "no-cache, no-store, must-revalidate"}
-            if row["box"]:
-                annotated = _annotate(path, row["box"], row["label"] or "")
-                if annotated is not None:
-                    return Response(content=annotated, media_type="image/jpeg", headers=no_cache)
-            return FileResponse(path, media_type="image/jpeg", headers=no_cache)
-        raise HTTPException(status_code=404, detail="snapshot not available")
+        if not path or not Path(path).is_file():
+            raise HTTPException(status_code=404, detail="snapshot not available")
+        return path
+
+    @router.get("/api/snapshots/{event_id}.jpg")
+    def snapshot(event_id: str):
+        path = _snapshot_or_404(event_id)
+        row = db.get_event(event_id)
+        no_cache = {"Cache-Control": "no-cache, no-store, must-revalidate"}
+        # Prefer the box from the latest correction so an edited box is what the
+        # card shows; false-positive corrections have no box to draw.
+        box = row["box"] if row else ""
+        label = row["label"] if row else ""
+        corr = db.latest_correction(event_id)
+        if corr:
+            if corr["correct_label"] == "false_positive":
+                box = ""
+            elif corr["box"]:
+                box = corr["box"]
+                label = corr["correct_label"] or label
+        if box:
+            annotated = _annotate(path, box, label or "")
+            if annotated is not None:
+                return Response(content=annotated, media_type="image/jpeg", headers=no_cache)
+        return FileResponse(path, media_type="image/jpeg", headers=no_cache)
+
+    @router.get("/api/snapshots/{event_id}/clean.jpg")
+    def snapshot_clean(event_id: str):
+        """Snapshot without the burned-in detection box, for the box editor."""
+        path = _snapshot_or_404(event_id)
+        no_cache = {"Cache-Control": "no-cache, no-store, must-revalidate"}
+        return FileResponse(path, media_type="image/jpeg", headers=no_cache)
 
     @router.get("/api/queue.json")
     def queue_json(status: str = "pending"):

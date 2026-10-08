@@ -150,10 +150,12 @@ class Database:
                 (reason, priority, suggested_label, event_id),
             )
 
-    def pending_new(self) -> list[sqlite3.Row]:
+    def pending_for_analysis(self, statuses: tuple[str, ...] = ("new",)) -> list[sqlite3.Row]:
+        placeholders = ",".join("?" for _ in statuses)
         with self.connect() as conn:
             return conn.execute(
-                "SELECT * FROM events WHERE status = 'new' ORDER BY start_time DESC"
+                f"SELECT * FROM events WHERE status IN ({placeholders}) ORDER BY start_time DESC",
+                tuple(statuses),
             ).fetchall()
 
     def queue(
@@ -347,6 +349,14 @@ class Database:
                 "DELETE FROM corrections WHERE event_id = ?", (event_id,)
             )
             return cur.rowcount
+
+    def latest_correction(self, event_id: str) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return conn.execute(
+                "SELECT correct_label, box FROM corrections WHERE event_id = ? "
+                "ORDER BY collected_at DESC, id DESC LIMIT 1",
+                (event_id,),
+            ).fetchone()
 
     def reset_event(self, event_id: str) -> None:
         """Undo a review: drop any correction and return the event to the queue."""

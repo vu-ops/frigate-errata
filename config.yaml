@@ -26,6 +26,12 @@ analysis:
                                       # (full-width slivers anchored on the frame
                                       # edge) are artifacts: auto-skip them so they
                                       # never reach the review queue or training
+  oversized_box:                      # boxes covering more than max_area of the
+    enabled: true                     # frame (merged detections, e.g. two cars
+    max_area: 0.4                     # under one box in IR night frames) are
+                                      # flagged for review instead of being
+                                      # auto-confirmed; they are also excluded
+                                      # from training pseudo-labels
   safe_labels:                      # common labels; a description that does not
     - person                        # confirm them is still flagged (so persistent
     - car                           # false positives surface), just at lower
