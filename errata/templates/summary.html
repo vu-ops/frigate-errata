@@ -176,22 +176,6 @@
 {% if train_state.running %}
 <div class="meta">Training in progress — started {{ train_state.started_at | localts }}</div>
 <div id="train-live" class="meta">starting…</div>
-<script>
-(function() {
-  var base = '{{ base }}';
-  function poll() {
-    fetch(base + '/api/train/status').then(function(r) { return r.json(); }).then(function(s) {
-      if (!s.running) { location.reload(); return; }
-      var el = document.getElementById('train-live');
-      if (el) {
-        el.textContent = (typeof trainDetail === 'function') ? trainDetail(s) : (s.detail || '');
-      }
-      setTimeout(poll, 3000);
-    }).catch(function() { setTimeout(poll, 5000); });
-  }
-  poll();
-})();
-</script>
 {% elif train_state.finished_at %}
 <div class="meta">Last run {{ train_state.finished_at | localts }} — {{ train_state.detail }}</div>
 {% else %}

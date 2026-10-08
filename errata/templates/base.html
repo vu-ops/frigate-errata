@@ -12,6 +12,7 @@ header { display: flex; gap: 1.5rem; align-items: center; padding: 0.75rem 1.25r
 header a { color: #9fb4ff; text-decoration: none; font-weight: 600; }
 header .brand { color: #fff; font-size: 1.05rem; letter-spacing: 0.02em; }
 header .version { color: #6b7488; font-size: 0.78rem; font-weight: 600; margin-left: -1rem; }
+header button.running { background: #243044; border-color: #3a4152; color: #9ec1ff; cursor: default; }
 main { padding: 1.25rem; max-width: 1400px; margin: 0 auto; }
 a { color: #9fb4ff; }
 .msg { background: #1d2b1f; border: 1px solid #2f5233; padding: 0.5rem 0.75rem; border-radius: 8px; margin-bottom: 1rem; font-size: 0.9rem; }
@@ -104,6 +105,10 @@ async function runNow(btn) {
     btn.textContent = 'Fetch latest';
   }
 }
+var trainBtn = document.getElementById('train-btn');
+var trainBtnTitle = trainBtn ? trainBtn.title : '';
+var trainPoll = null;
+var sawRunning = false;
 function trainLabel(s) {
   if (s.phase === 'exporting dataset') return 'Exporting dataset…';
   if (s.phase === 'export' || s.phase === 'publish') return 'Publishing…';
@@ -121,7 +126,38 @@ function trainDetail(s) {
   if (!parts.length) parts.push(s.detail || '');
   return parts.join(' · ');
 }
+function showTraining(s) {
+  if (trainBtn) {
+    trainBtn.disabled = true;
+    trainBtn.classList.add('running');
+    trainBtn.textContent = trainLabel(s);
+    trainBtn.title = trainDetail(s);
+  }
+  var live = document.getElementById('train-live');
+  if (live) live.textContent = trainDetail(s);
+}
+function resetTraining() {
+  if (trainBtn) {
+    trainBtn.disabled = false;
+    trainBtn.classList.remove('running');
+    trainBtn.textContent = 'Train';
+    trainBtn.title = trainBtnTitle;
+  }
+}
+function ensureTrainPoll() {
+  if (!trainPoll) trainPoll = setInterval(refreshTrainState, 3000);
+}
+async function refreshTrainState() {
+  var s;
+  try { s = await (await fetch('{{ base }}/api/train/status')).json(); }
+  catch (e) { return; }
+  if (s.running) { sawRunning = true; showTraining(s); return; }
+  if (trainPoll) { clearInterval(trainPoll); trainPoll = null; }
+  if (sawRunning) { location.reload(); return; }
+  resetTraining();
+}
 async function startTrain(btn) {
+  if (btn.disabled) return;
   if (!confirm('Start a training run now?')) return;
   btn.disabled = true;
   btn.textContent = 'Training…';
@@ -130,27 +166,23 @@ async function startTrain(btn) {
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok) {
       alert('Could not start training: ' + (j.detail || r.status));
-      btn.disabled = false;
-      btn.textContent = 'Train';
+      resetTraining();
       return;
     }
-    while (true) {
-      const s = await (await fetch('{{ base }}/api/train/status')).json();
-      if (!s.running) {
-        alert(s.ok === false ? ('Training failed: ' + s.detail) : ('Training finished: ' + s.detail));
-        location.reload();
-        return;
-      }
-      btn.textContent = trainLabel(s);
-      var live = document.getElementById('train-live');
-      if (live) live.textContent = trainDetail(s);
-      await new Promise(res => setTimeout(res, 3000));
-    }
+    sawRunning = true;
+    showTraining({ phase: 'starting' });
+    ensureTrainPoll();
   } catch (err) {
-    btn.disabled = false;
-    btn.textContent = 'Train';
+    resetTraining();
   }
 }
+(async function initTrainState() {
+  try {
+    const s = await (await fetch('{{ base }}/api/train/status')).json();
+    if (s.running) { sawRunning = true; showTraining(s); ensureTrainPoll(); }
+  } catch (e) {}
+})();
+
 </script>
 </body>
 </html>
