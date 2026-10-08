@@ -556,7 +556,12 @@ def update_frigate_config(cfg: dict, db: Database, model_path: str) -> bool:
     return True
 
 
-def run_training(cfg: dict, db: Database, device: str | None = None) -> dict:
+def run_training(
+    cfg: dict,
+    db: Database,
+    device: str | None = None,
+    on_progress=None,
+) -> dict:
     import multiprocessing as mp
 
     try:
@@ -566,14 +571,75 @@ def run_training(cfg: dict, db: Database, device: str | None = None) -> dict:
     from ultralytics import YOLO
 
     training = cfg["training"]
+    total_epochs = int(training["epochs"])
     requested_device = str(device) if device is not None else str(training.get("device", "cpu"))
     data_yaml = Path(training["dataset_dir"]) / "data.yaml"
+    run_started = time.time()
+
+    def emit(update: dict) -> None:
+        if on_progress is None:
+            return
+        try:
+            on_progress(update)
+        except Exception:
+            logger.debug("training progress callback failed", exc_info=True)
 
     def _train(device: str):
         model = YOLO(f"{training['model_type']}.pt")
+
+        def _on_train_start(trainer):
+            emit(
+                {
+                    "detail": "training",
+                    "phase": "training",
+                    "epoch": 0,
+                    "epochs": int(getattr(trainer, "epochs", 0) or total_epochs),
+                    "progress": 0.0,
+                }
+            )
+
+        def _on_fit_epoch_end(trainer):
+            epochs = int(getattr(trainer, "epochs", 0) or total_epochs)
+            epoch = int(getattr(trainer, "epoch", 0)) + 1
+            metrics: dict = {}
+            raw = getattr(trainer, "metrics", None) or {}
+            for key, short in (
+                ("metrics/mAP50(B)", "mAP50"),
+                ("metrics/mAP50-95(B)", "mAP50-95"),
+            ):
+                value = raw.get(key)
+                if value is not None:
+                    try:
+                        metrics[short] = round(float(value), 4)
+                    except (TypeError, ValueError):
+                        pass
+            loss = getattr(trainer, "tloss", None)
+            if loss is not None:
+                try:
+                    values = [round(float(v), 4) for v in list(loss)]
+                except (TypeError, ValueError):
+                    values = []
+                if len(values) >= 3:
+                    metrics.update(
+                        {"box_loss": values[0], "cls_loss": values[1], "dfl_loss": values[2]}
+                    )
+            emit(
+                {
+                    "detail": "training",
+                    "phase": "training",
+                    "epoch": epoch,
+                    "epochs": epochs,
+                    "progress": round(epoch / epochs, 4) if epochs else 0.0,
+                    "metrics": metrics,
+                }
+            )
+
+        model.add_callback("on_train_start", _on_train_start)
+        model.add_callback("on_fit_epoch_end", _on_fit_epoch_end)
+        train_started = time.time()
         model.train(
             data=str(data_yaml),
-            epochs=int(training["epochs"]),
+            epochs=total_epochs,
             imgsz=int(training["imgsz"]),
             batch=int(training.get("batch", 16)) or 16,
             workers=int(training.get("workers", 8)),
@@ -582,27 +648,32 @@ def run_training(cfg: dict, db: Database, device: str | None = None) -> dict:
             project=str(training["model_output_dir"]),
             name="train",
         )
-        return model
+        return model, time.time() - train_started
 
     try:
-        model = _train(requested_device)
+        model, train_seconds = _train(requested_device)
     except Exception:
         if requested_device == "cpu" or device is not None:
             raise
         logger.exception("training on device '%s' failed, falling back to cpu", requested_device)
         device = "cpu"
-        model = _train(device)
+        model, train_seconds = _train(device)
     else:
         device = requested_device
 
+    emit({"detail": "exporting onnx", "phase": "export"})
     best_weights = Path(model.trainer.best)
     onnx_path = Path(model.export(format="onnx", imgsz=int(training["imgsz"])))
     onnx_path = convert_onnx_input_to_nhwc(onnx_path)
+    emit({"detail": "publishing model", "phase": "publish"})
     dataset = dataset_stats(cfg)
+    duration_seconds = round(time.time() - run_started, 1)
     metrics = {
-        "epochs": int(training["epochs"]),
+        "epochs": total_epochs,
         "imgsz": int(training["imgsz"]),
         "device": device,
+        "duration_seconds": duration_seconds,
+        "train_seconds": round(train_seconds, 1),
         "corrections_total": db.corrections_count(),
         "unexported_corrections": db.corrections_unexported_count(),
         "dataset": dataset,

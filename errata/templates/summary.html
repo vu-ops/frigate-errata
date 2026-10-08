@@ -55,12 +55,13 @@
 <div class="meta">"Corrections" is the all-time DB correction count at publish time. "Trained on" is the dataset snapshot captured when that model was trained.</div>
 {% if versions %}
 <table>
-  <tr><th>Published</th><th>Path</th><th>Corrections</th><th>Trained on</th></tr>
+  <tr><th>Published</th><th>Path</th><th>Corrections</th><th>Took</th><th>Trained on</th></tr>
   {% for v in versions %}
   <tr>
     <td>{{ v.created_at | localts }}</td>
     <td>{{ v.model_path }}</td>
     <td class="n">{{ v.training_count }}</td>
+    <td class="n">{{ v.duration_seconds | humandur }}</td>
     <td>
       {% if v.dataset %}
         {{ v.dataset.images.total }} img · {{ v.dataset.objects.total }} obj · {{ v.dataset.pseudo.images }} pseudo
@@ -97,14 +98,23 @@
     });
   }
   function fmt(ts) { return new Date(ts * 1000).toLocaleString(); }
+  function fmtDur(s) {
+    if (s == null || s === '') return '—';
+    s = Math.round(s);
+    if (s < 60) return s + 's';
+    var m = Math.floor(s / 60), sec = s % 60;
+    if (m < 60) return m + 'm' + (sec ? ' ' + sec + 's' : '');
+    var h = Math.floor(m / 60); m = m % 60;
+    return h + 'h' + (m ? ' ' + m + 'm' : '');
+  }
   function load() {
     var box = document.getElementById('deploy');
     fetch(base + '/api/models').then(function(r) { return r.json(); }).then(function(d) {
       var html = '';
       if (d.error) html += '<div class="meta">Frigate: unavailable (' + esc(d.error) + ')</div>';
       else if (d.active_name) html += '<div class="meta">Active in Frigate: <strong>' + esc(d.active_name) + '</strong></div>';
-      html += '<table><tr><th>Published</th><th>Model</th><th>Corrections</th><th>Trained on</th><th>Size</th><th></th></tr>';
-      if (!d.models.length) html += '<tr><td colspan="6" class="empty">No published models.</td></tr>';
+      html += '<table><tr><th>Published</th><th>Model</th><th>Corrections</th><th>Took</th><th>Trained on</th><th>Size</th><th></th></tr>';
+      if (!d.models.length) html += '<tr><td colspan="7" class="empty">No published models.</td></tr>';
       for (var i = 0; i < d.models.length; i++) {
         var m = d.models[i];
         var active = m.name === d.active_name;
@@ -113,7 +123,7 @@
           ? esc(tds.images.total + ' img · ' + tds.objects.total + ' obj · ' + tds.pseudo.images + ' pseudo')
           : '<span class="meta">not recorded</span>';
         html += '<tr><td>' + fmt(m.created_at) + '</td><td>' + esc(m.name) + (active ? ' <strong>(active)</strong>' : '') +
-          '</td><td class="n">' + (m.training_count == null ? '—' : m.training_count) + '</td><td>' + trained + '</td><td class="n">' + m.size_mb + ' MB</td>' +
+          '</td><td class="n">' + (m.training_count == null ? '—' : m.training_count) + '</td><td class="n">' + fmtDur(m.duration_seconds) + '</td><td>' + trained + '</td><td class="n">' + m.size_mb + ' MB</td>' +
           '<td>' + (active ? '' : '<button data-model="' + esc(m.name) + '" class="act">Activate</button>') + '</td></tr>';
       }
       html += '</table>';
@@ -165,6 +175,23 @@
 <div class="meta">The Train button trains on the device configured in <code>config.yaml</code> (<code>training.device</code>; Intel Arc XPU by default) and falls back to CPU automatically if the GPU is unavailable. Prefer faster training? <a href="{{ base }}/api/train/mac-kit.zip">Download the Mac training kit (.zip)</a> — it bundles the dataset, the source files, and a shell script to train on your Mac (see its README for Homebrew setup).</div>
 {% if train_state.running %}
 <div class="meta">Training in progress — started {{ train_state.started_at | localts }}</div>
+<div id="train-live" class="meta">starting…</div>
+<script>
+(function() {
+  var base = '{{ base }}';
+  function poll() {
+    fetch(base + '/api/train/status').then(function(r) { return r.json(); }).then(function(s) {
+      if (!s.running) { location.reload(); return; }
+      var el = document.getElementById('train-live');
+      if (el) {
+        el.textContent = (typeof trainDetail === 'function') ? trainDetail(s) : (s.detail || '');
+      }
+      setTimeout(poll, 3000);
+    }).catch(function() { setTimeout(poll, 5000); });
+  }
+  poll();
+})();
+</script>
 {% elif train_state.finished_at %}
 <div class="meta">Last run {{ train_state.finished_at | localts }} — {{ train_state.detail }}</div>
 {% else %}

@@ -102,6 +102,23 @@ async function runNow(btn) {
     btn.textContent = 'Fetch latest';
   }
 }
+function trainLabel(s) {
+  if (s.phase === 'exporting dataset') return 'Exporting dataset…';
+  if (s.phase === 'export' || s.phase === 'publish') return 'Publishing…';
+  if (s.epochs) return 'Training ' + (s.epoch || 0) + '/' + s.epochs;
+  return 'Training…';
+}
+function trainDetail(s) {
+  var parts = [];
+  if (s.epochs) parts.push('epoch ' + (s.epoch || 0) + '/' + s.epochs + ' (' + Math.round((s.progress || 0) * 100) + '%)');
+  var m = s.metrics || {};
+  if (m.mAP50 != null) parts.push('mAP50 ' + m.mAP50);
+  if (m.box_loss != null) parts.push('box ' + m.box_loss);
+  if (m.cls_loss != null) parts.push('cls ' + m.cls_loss);
+  if (m.dfl_loss != null) parts.push('dfl ' + m.dfl_loss);
+  if (!parts.length) parts.push(s.detail || '');
+  return parts.join(' · ');
+}
 async function startTrain(btn) {
   if (!confirm('Start a training run now?')) return;
   btn.disabled = true;
@@ -122,7 +139,10 @@ async function startTrain(btn) {
         location.reload();
         return;
       }
-      await new Promise(res => setTimeout(res, 5000));
+      btn.textContent = trainLabel(s);
+      var live = document.getElementById('train-live');
+      if (live) live.textContent = trainDetail(s);
+      await new Promise(res => setTimeout(res, 3000));
     }
   } catch (err) {
     btn.disabled = false;

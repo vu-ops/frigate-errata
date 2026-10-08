@@ -70,6 +70,24 @@ def format_ts(ts) -> str:
     return time.strftime("%Y-%m-%d %H:%M", time.localtime(float(ts)))
 
 
+def format_duration(seconds) -> str:
+    if seconds in (None, ""):
+        return "—"
+    try:
+        seconds = int(round(float(seconds)))
+    except (TypeError, ValueError):
+        return "—"
+    if seconds < 0:
+        return "—"
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, sec = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {sec}s" if sec else f"{minutes}m"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes}m" if minutes else f"{hours}h"
+
+
 def create_app(config: dict) -> FastAPI:
     db = Database(config["database"]["path"])
     scheduler = Scheduler(config, db)
@@ -83,6 +101,7 @@ def create_app(config: dict) -> FastAPI:
 
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
     templates.env.filters["localts"] = format_ts
+    templates.env.filters["humandur"] = format_duration
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -161,6 +180,8 @@ def create_app(config: dict) -> FastAPI:
             except (json.JSONDecodeError, TypeError):
                 metrics = {}
             row["dataset"] = metrics.get("dataset")
+            row["duration_seconds"] = metrics.get("duration_seconds")
+            row["train_seconds"] = metrics.get("train_seconds")
             version_rows.append(row)
         ctx = {
             "counts": db.counts_by_status(),
@@ -406,25 +427,61 @@ def create_app(config: dict) -> FastAPI:
         "finished_at": None,
         "ok": None,
         "detail": "no training run yet",
+        "phase": None,
+        "epoch": None,
+        "epochs": None,
+        "progress": None,
+        "metrics": None,
     }
 
     def _train_worker() -> None:
         train_state.update(
-            {"running": True, "started_at": time.time(), "finished_at": None, "ok": None, "detail": "training"}
+            {
+                "running": True,
+                "started_at": time.time(),
+                "finished_at": None,
+                "ok": None,
+                "detail": "training",
+                "phase": "starting",
+                "epoch": None,
+                "epochs": None,
+                "progress": None,
+                "metrics": None,
+            }
         )
         try:
             from .trainer import export_dataset, run_training
 
             train_state["detail"] = "exporting dataset"
+            train_state["phase"] = "exporting dataset"
             exported = export_dataset(config, db)
             train_state["detail"] = "training"
-            result = run_training(config, db, device=None)
+            result = run_training(
+                config, db, device=None, on_progress=train_state.update
+            )
             result["exported"] = exported
             db.kv_set("last_train_at", str(time.time()))
-            train_state.update({"running": False, "finished_at": time.time(), "ok": True, "detail": json.dumps(result)})
+            train_state.update(
+                {
+                    "running": False,
+                    "finished_at": time.time(),
+                    "ok": True,
+                    "detail": json.dumps(result),
+                    "phase": "done",
+                    "progress": 1.0,
+                }
+            )
         except Exception as exc:
             logger.exception("training job failed")
-            train_state.update({"running": False, "finished_at": time.time(), "ok": False, "detail": str(exc)})
+            train_state.update(
+                {
+                    "running": False,
+                    "finished_at": time.time(),
+                    "ok": False,
+                    "detail": str(exc),
+                    "phase": "failed",
+                }
+            )
 
     @router.post("/api/train")
     def start_train():
@@ -472,9 +529,12 @@ def create_app(config: dict) -> FastAPI:
             if v:
                 m["training_count"] = v["training_count"]
                 try:
-                    m["training_dataset"] = (json.loads(v["metrics"]) if v["metrics"] else {}).get("dataset")
+                    metrics = json.loads(v["metrics"]) if v["metrics"] else {}
                 except (json.JSONDecodeError, TypeError):
-                    m["training_dataset"] = None
+                    metrics = {}
+                m["training_dataset"] = metrics.get("dataset")
+                m["duration_seconds"] = metrics.get("duration_seconds")
+                m["train_seconds"] = metrics.get("train_seconds")
         return JSONResponse(
             {
                 "active": active,
