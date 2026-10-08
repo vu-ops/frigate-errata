@@ -297,6 +297,152 @@ analysis:
       - bulldog
       - husky
       - corgi
+      - dog
+      - mixed breed
+      - rescue
+      - stray
+      - golden retriever
+      - lab
+      - labrador retriever
+      - goldador
+      - chesapeake bay retriever
+      - flat coated retriever
+      - nova scotia duck tolling retriever
+      - cocker spaniel
+      - english cocker spaniel
+      - american cocker spaniel
+      - springer spaniel
+      - english springer spaniel
+      - welsh springer spaniel
+      - cavalier king charles spaniel
+      - english toy spaniel
+      - boykin spaniel
+      - brittany
+      - english setter
+      - irish setter
+      - gordon setter
+      - german shepherd
+      - belgian malinois
+      - malinois
+      - belgian sheepdog
+      - australian shepherd
+      - aussie
+      - australian cattle dog
+      - blue heeler
+      - border collie
+      - collie
+      - rough collie
+      - bearded collie
+      - old english sheepdog
+      - sheepdog
+      - shetland sheepdog
+      - sheltie
+      - cardigan welsh corgi
+      - pembroke welsh corgi
+      - welsh corgi
+      - bull terrier
+      - staffordshire bull terrier
+      - staffie
+      - american pit bull terrier
+      - american staffordshire terrier
+      - amstaff
+      - pit bull
+      - pitbull
+      - american bully
+      - jack russell
+      - jack russell terrier
+      - rat terrier
+      - fox terrier
+      - boston terrier
+      - cairn terrier
+      - norfolk terrier
+      - scottish terrier
+      - scottie
+      - west highland white terrier
+      - westie
+      - yorkshire terrier
+      - yorkie
+      - silky terrier
+      - rottweiler
+      - rottie
+      - doberman
+      - doberman pinscher
+      - boxer
+      - great dane
+      - mastiff
+      - bullmastiff
+      - cane corso
+      - great pyrenees
+      - bernese mountain dog
+      - saint bernard
+      - st bernard
+      - newfoundland
+      - akita
+      - alaskan malamute
+      - malamute
+      - siberian husky
+      - samoyed
+      - keeshond
+      - schipperke
+      - komondor
+      - kuvasz
+      - portuguese water dog
+      - rhodesian ridgeback
+      - ridgeback
+      - vizsla
+      - weimaraner
+      - giant schnauzer
+      - schnauzer
+      - norwegian elkhound
+      - basset hound
+      - bloodhound
+      - coonhound
+      - bluetick coonhound
+      - redbone coonhound
+      - greyhound
+      - italian greyhound
+      - whippet
+      - saluki
+      - basenji
+      - dachshund
+      - wiener dog
+      - chihuahua
+      - pomeranian
+      - pug
+      - puggle
+      - maltese
+      - bichon frise
+      - bichon
+      - havanese
+      - shih tzu
+      - lhasa apso
+      - pekingese
+      - papillon
+      - japanese chin
+      - chinese crested
+      - brussels griffon
+      - miniature pinscher
+      - miniature schnauzer
+      - toy poodle
+      - miniature poodle
+      - standard poodle
+      - english bulldog
+      - french bulldog
+      - frenchie
+      - american bulldog
+      - american eskimo
+      - dalmatian
+      - shar pei
+      - shiba inu
+      - shiba
+      - chow chow
+      - german shorthaired pointer
+      - german wirehaired pointer
+      - doodle
+      - goldendoodle
+      - labradoodle
+      - bernedoodle
+      - norwegian lundehund
     bird:
       - crow
       - raven
@@ -417,6 +563,136 @@ analysis:
     gls:
       - gls truck
       - gls van
+    delivery_truck:
+      - delivery truck
+      - delivery van
+      - delivery vehicle
+      - delivery service
+      - box truck
+      - parcel truck
+      - package truck
+      - courier truck
+      - courier van
+      - freight truck
+      - step van
+      - cargo van
+      - route truck
+      - ups
+      - united parcel service
+      - fedex
+      - federal express
+      - fedex ground
+      - fedex express
+      - usps
+      - united states postal service
+      - postal truck
+      - postal van
+      - mail truck
+      - mail van
+      - dhl
+      - dhl express
+      - dhl ecommerce
+      - gls
+      - general logistics systems
+      - ontrac
+      - lasership
+      - lonestar
+      - veho
+      - axlehire
+      - pitney bowes
+      - newgistics
+      - osm worldwide
+      - speedx
+      - landmark global
+      - asendia
+      - purolator
+      - canada post
+      - royal mail
+      - dpd
+      - hermes
+      - evri
+      - yodel
+      - tnt
+      - aramex
+      - sf express
+      - jd logistics
+      - cainiao
+      - an post
+      - postnl
+      - bpost
+      - la poste
+      - chronopost
+      - colissimo
+      - mondial relay
+      - correos
+      - posti
+      - bring
+      - postnord
+      - amazon
+      - amazon prime
+      - amazon flex
+      - amazon logistics
+      - db schenker
+      - xpo logistics
+      - old dominion
+      - estes
+      - saia
+      - yrc
+      - abf freight
+      - tforce freight
+      - r+l carriers
+      - southeastern freight
+      - j.b. hunt
+      - jb hunt
+      - schneider
+      - swift
+      - werner
+      - ryder
+      - penske
+      - u-haul
+      - uhaul
+      - budget truck
+      - walmart
+      - target
+      - costco
+      - sam's club
+      - sams club
+      - home depot
+      - lowe's
+      - lowes
+      - best buy
+      - wayfair
+      - chewy
+      - hellofresh
+      - blue apron
+      - instacart
+      - doordash
+      - uber eats
+      - grubhub
+      - postmates
+      - shipt
+      - gopuff
+      - kroger
+      - safeway
+      - publix
+      - albertsons
+      - walgreens
+      - cvs
+      - rite aid
+      - pepsi
+      - pepsico
+      - coca-cola
+      - coca cola
+      - coke
+      - frito-lay
+      - frito lay
+      - sysco
+      - us foods
+      - gordon food service
+      - performance food group
+      - cintas
+      - unifirst
+      - aramark
   suggestion_groups:
     animal:
       - cat
@@ -442,6 +718,7 @@ analysis:
       - amazon
       - dhl
       - gls
+      - delivery_truck
     person:
       - person
     object:
@@ -482,6 +759,7 @@ labels:
     - garbage_truck
     - boat
     - coyote
+    - delivery_truck
 
 training:
   trigger_threshold: 50
