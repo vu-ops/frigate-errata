@@ -133,6 +133,9 @@ def create_app(config: dict) -> FastAPI:
         status: str = "pending",
         msg: str = "",
     ):
+        purged = db.purge_missing_snapshots()
+        if purged and not msg:
+            msg = f"Removed {purged} event(s) whose snapshot file no longer exists."
         rows = db.queue(
             status=status or "pending",
             camera=camera or None,
@@ -315,6 +318,13 @@ def create_app(config: dict) -> FastAPI:
         row = db.get_event(event_id)
         if row is None:
             raise HTTPException(status_code=404, detail="event not found")
+        snapshot = row["snapshot_path"]
+        if not snapshot or not Path(snapshot).is_file():
+            db.delete_event(event_id)
+            params = dict(parse_qsl(return_to, keep_blank_values=True))
+            params.pop("msg", None)
+            params["msg"] = f"{event_id} removed: its snapshot file is missing"
+            return RedirectResponse(f"{base}/?{urlencode(params)}", status_code=303)
         msg = apply_review(row, action, label, _parse_box_form(box))
         params = dict(parse_qsl(return_to, keep_blank_values=True))
         params.pop("msg", None)

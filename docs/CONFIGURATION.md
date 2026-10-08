@@ -237,6 +237,12 @@ For every unprocessed event (newest first):
    queue or the dataset. With the option off it is flagged as `noise` instead.
    `python -m errata.trainer --check-boxes` reports these, and
    `--skip-degenerate-boxes` retroactively skips any already queued.
+2. No snapshot on disk (never downloaded, or removed by the nightly retention
+   prune once it aged past `review.auto_keep_per_label`) → the event and any of
+   its corrections are **deleted from the database**. An image-less event can't
+   be reviewed or trained on, so it is removed rather than queued. This runs at
+   the start of every analysis cycle and on each review-queue page load;
+   `python -m errata.trainer --purge-missing-snapshots` forces it on demand.
 3. Vocabulary check (needs a GenAI description). A match is the label
    itself, any configured `synonyms` entry, their plural/possessive forms, or
    a built-in irregular plural:

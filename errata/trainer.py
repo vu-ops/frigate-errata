@@ -823,6 +823,16 @@ def main() -> None:
         action="store_true",
         help="re-run the analyzer on auto-confirmed events so new or changed analysis rules apply to the existing backlog (human-reviewed events are untouched)",
     )
+    parser.add_argument(
+        "--reanalyze",
+        action="store_true",
+        help="re-run the analyzer over the whole backlog (new + flagged + confirmed); also drops already-flagged events whose snapshot no longer exists (human-reviewed events are untouched)",
+    )
+    parser.add_argument(
+        "--purge-missing-snapshots",
+        action="store_true",
+        help="delete events (and their corrections) whose snapshot file is missing, freeing image-less queue entries",
+    )
     parser.add_argument("--train", action="store_true", help="train a model (requires ultralytics)")
     args = parser.parse_args()
 
@@ -846,6 +856,18 @@ def main() -> None:
 
         stats = Analyzer(cfg, db).run(statuses=("confirmed",))
         logger.info("reanalysis of confirmed events complete: %s", stats)
+        return
+
+    if args.reanalyze:
+        from .analyzer import Analyzer
+
+        stats = Analyzer(cfg, db).run(statuses=("new", "flagged", "confirmed"))
+        logger.info("full reanalysis complete: %s", stats)
+        return
+
+    if args.purge_missing_snapshots:
+        removed = db.purge_missing_snapshots()
+        logger.info("purged %d event(s) whose snapshot file is missing", removed)
         return
 
     if args.refresh_snapshots:

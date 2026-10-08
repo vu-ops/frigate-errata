@@ -56,6 +56,9 @@ class Analyzer:
 
     def run(self, statuses: tuple[str, ...] = ("new",)) -> dict:
         self._refresh_synonyms()
+        purged = self.db.purge_missing_snapshots()
+        if purged:
+            logger.info("purged %d event(s) whose snapshot file is missing", purged)
         rows = self.db.pending_for_analysis(statuses)
         stats = {
             "scanned": len(rows),

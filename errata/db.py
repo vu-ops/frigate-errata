@@ -377,6 +377,32 @@ class Database:
                 "UPDATE events SET snapshot_path = '' WHERE id = ?", (event_id,)
             )
 
+    def delete_event(self, event_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute("DELETE FROM corrections WHERE event_id = ?", (event_id,))
+            conn.execute("DELETE FROM events WHERE id = ?", (event_id,))
+
+    def purge_missing_snapshots(self) -> int:
+        """Delete events (and their corrections) whose snapshot file is gone.
+
+        Covers both cleared paths (nightly retention sets snapshot_path = '')
+        and stale paths whose file no longer exists, so the queue and dataset
+        never reference images that cannot be shown or trained on.
+        """
+        with self.connect() as conn:
+            rows = conn.execute("SELECT id, snapshot_path FROM events").fetchall()
+            ids = [
+                r["id"]
+                for r in rows
+                if not r["snapshot_path"] or not Path(r["snapshot_path"]).is_file()
+            ]
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                marks = ",".join("?" * len(chunk))
+                conn.execute(f"DELETE FROM corrections WHERE event_id IN ({marks})", chunk)
+                conn.execute(f"DELETE FROM events WHERE id IN ({marks})", chunk)
+        return len(ids)
+
     def set_snapshot(self, event_id: str, path: str) -> None:
         with self.connect() as conn:
             conn.execute(
