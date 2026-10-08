@@ -137,39 +137,4 @@
   <div class="stat"><div class="n">{{ pending_count }}</div><div class="t">Pending review</div></div>
   <div class="stat"><div class="n">{{ total_count }}</div><div class="t">Events tracked</div></div>
 </div>
-<div class="msg hint">
-  Each card shows a detection: the snapshot (click to enlarge), the YOLO label,
-  confidence, why it was flagged, and the GenAI description. The quick buttons
-  confirm the image as that label in one click — first is what YOLO detected,
-  the rest are suggestions from the GenAI description. Use the dropdown +
-  <b>Change</b> for any other label, <b>False positive</b> if there is nothing
-  there (only when no other object of interest is in frame), or <b>Skip</b> to
-  set it aside entirely. Corrections accumulate until the retrain threshold —
-  see Summary for progress.
-  <br>
-  <b>Edit box:</b> click <b>Edit box</b> on any card to open the snapshot and
-  move, resize, or draw the detection box. The box you save is what the
-  correction trains on — use it to tighten a merged/oversized detection or to
-  box an object the detector missed. <b>Save correction</b> stores the label +
-  box; <b>Save as false positive</b> uses the drawn region as the background
-  crop.
-  <br>
-  <b>Review past decisions:</b> use the <b>View</b> filter to show
-  <i>Corrected</i>, <i>False positive</i>, <i>Auto-confirmed</i>, <i>Ignored</i>,
-  or <i>Skipped</i> events. A corrected card shows the chosen label as
-  <span class="badge corrected">→ label</span>; pick a different one and click
-  <b>Change</b> to fix it, or <b>Undo review</b> to send the event back to the
-  queue. Re-reviewing replaces the previous correction, so training always uses
-  your latest decision.
-  <br>
-  <b>Bulk change:</b> the toolbar has two actions. <b>Apply to matching</b> sets
-  a <i>status</i> on every pending event matching the Camera / Label / Reason
-  filters (leave them at <i>All</i> for the whole queue; pick <i>skipped</i> to
-  set aside all remaining items in one go). <b>Apply label to matching</b>
-  re-labels every event in the current <b>View</b> matching the filters to the
-  chosen label — e.g. View <i>Corrected</i> + Corrected-to <i>fox</i> + Set
-  label <i>coyote</i> re-labels all fox corrections in one click. It replaces
-  any existing correction on those events, so double-check the View and
-  filters first.
-</div>
 {% endblock %}
