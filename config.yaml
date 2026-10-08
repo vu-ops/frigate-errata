@@ -738,7 +738,10 @@ analysis:
     window_hours: 1
 
 review:
-  auto_keep_per_label: 150
+  auto_keep_per_label: 500           # nightly prune: keep at most N most-recent
+                                     # snapshots per label for auto-confirmed /
+                                     # auto-ignored events; human corrections and
+                                     # false positives are kept forever
   queue_limit: 200
 
 labels:
@@ -789,7 +792,7 @@ training:
   auto_update_frigate_config: false
   pseudo_labels:
     enabled: true
-    per_camera_label_day: 10
+    per_camera_label_day: 25
     max_per_class: 500
 
 notifications:

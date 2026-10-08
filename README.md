@@ -199,9 +199,11 @@ PyTorch falls back to CPU at runtime.
   `python -m errata.trainer --refresh-snapshots` then `--rebuild`.
 - The review UI draws the detection box on the fly when serving snapshots; the
   on-disk image stays clean, so training never sees the overlay.
-- Retention (`nightly prune`, once per 24h) caps three buckets at
-  `review.auto_keep_per_label` most-recent per label; false positives are kept
-  forever. Pending and skipped events are never pruned.
+- Retention (`nightly prune`, once per 24h) caps auto-confirmed / auto-ignored
+  events at `review.auto_keep_per_label` most-recent per label. Human
+  corrections and false positives are ground truth and kept forever; pending and
+  skipped events are never pruned. Events whose snapshot file is missing are
+  deleted from the database.
 - `config.yaml` changes require `docker compose restart errata`.
 - Errata's mismatch and auto-confirm rules read Frigate GenAI event
   descriptions. GenAI is required for description-based auto-confirm

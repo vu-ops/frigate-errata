@@ -146,17 +146,13 @@ analysis:
     window_hours: 1                # ...within this window flags "noise"
 
 review:
-  auto_keep_per_label: 150         # nightly prune: keep at most N most-recent
-                                   # snapshots per label. Applies to three
-                                   # buckets: (1) auto-confirmed / auto-ignored
-                                   # events PLUS same-label human confirms,
-                                   # counted together per label; (2) genuine
-                                   # corrections (human picked a different
-                                   # label), capped per the human-selected
-                                   # label; (3) false positives are exempt and
-                                   # kept forever. 0 disables pruning entirely
-                                   # (keep everything). Pending queue items and
-                                   # skipped events are never pruned.
+  auto_keep_per_label: 500         # nightly prune: keep at most N most-recent
+                                   # auto-confirmed / auto-ignored snapshots per
+                                   # label. Human corrections and false positives
+                                   # are ground truth and kept forever. 0
+                                   # disables pruning entirely (keep everything).
+                                   # Pending queue items and skipped events are
+                                   # never pruned.
   queue_limit: 200                 # max rows shown / exported per request
 
 labels:
@@ -554,7 +550,7 @@ manually (or cron it).
 | Task | Command |
 |---|---|
 | Immediate harvest+analyze | **"Fetch latest" button** in the UI header, or `curl -X POST https://.../errata/api/run-now` |
-| Snapshot cleanup | Automatic: the scheduler cycle (every `harvest.interval_minutes`) runs the prune at most once per 24h. Three buckets, each capped at `review.auto_keep_per_label` most-recent per label: auto-confirmed/auto-ignored events share the same per-label budget as same-label human confirms; genuine corrections (human chose a different label) get their own per-human-label budget; false positives are exempt (kept forever). Pending and skipped events are never pruned. Force the marker to re-run: `docker exec errata python -c "from errata.db import Database; Database('/data/errata.db').kv_delete('last_prune_at')"` |
+| Snapshot cleanup | Automatic: the scheduler cycle (every `harvest.interval_minutes`) runs the prune at most once per 24h. Only auto-confirmed / auto-ignored events with no human correction are capped at `review.auto_keep_per_label` most-recent per label. Human corrections and false positives are ground truth and kept forever; pending/skipped events are never pruned, and events whose snapshot file is missing are deleted from the database. Force the marker to re-run: `docker exec errata python -c "from errata.db import Database; Database('/data/errata.db').kv_delete('last_prune_at')"` |
 | Trigger model rebuild | Train button (GPU/CPU per config), Mac kit, or `./deploy/train.sh`. Use `--export-only` to just rebuild the dataset and `--rebuild` to re-export every correction from scratch (wipes the dataset). The Discord notification at the correction threshold is a reminder, not a trigger |
 | Backfill further into history | set `harvest.lookback_hours` (e.g. 168 for a week), clear the watermark, trigger: `docker exec errata python -c "from errata.db import Database; Database('/data/errata.db').kv_delete('last_processed_at')"` then Fetch latest. Snapshots for old events may be expired by Frigate retention (`record` / snapshot retention) — those events are stored without images |
 | Reset processed-watermark (re-harvest 24h) | `docker exec errata python -c "from errata.db import Database; Database('/data/errata.db').kv_delete('last_processed_at')"` (or edit the `config` table) |
@@ -574,6 +570,6 @@ manually (or cron it).
 | 401 in logs | Set `ERRATA_FRIGATE_USER` / `ERRATA_FRIGATE_PASSWORD` in `.env` and restart |
 | 502 from nginx | errata container down or `server.listen_port` mismatch; the resolver needs both containers on the same compose network |
 | UI assets / links broken behind proxy | `server.base_path` must equal the nginx location prefix (default `/errata`) |
-| Snapshots missing for old events | Auto-confirmed/auto-ignored, same-label confirms, and corrections are pruned nightly to the most recent `review.auto_keep_per_label` per label (0 = never prune); false-positive snapshots are kept forever, as are pending/skipped events |
+| Snapshots missing for old events | Auto-confirmed/auto-ignored snapshots with no human correction are pruned nightly to the most recent `review.auto_keep_per_label` per label (0 = never prune); human corrections and false-positive snapshots are kept forever, as are pending/skipped events. Events whose snapshot file is missing are deleted from the database |
 | Model rejected by Frigate | Confirm `labelmap_path` exists and class count matches; check detector logs; ONNX export imgsz must match `model.width/height` |
 | Harvest rescans same window | `last_processed_at` only advances on successful runs; lookback window covers stragglers |

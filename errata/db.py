@@ -466,6 +466,12 @@ class Database:
         return [row["file_path"] for row in stale]
 
     def prune_candidates(self, keep_per_label: int) -> list[sqlite3.Row]:
+        """Events whose snapshot may be deleted by the nightly retention pass.
+
+        Only auto-confirmed / auto-ignored events with *no* human correction are
+        capped (newest `keep_per_label` per label). Human corrections and false
+        positives are ground truth and are never pruned.
+        """
         with self.connect() as conn:
             return conn.execute(
                 """
@@ -475,32 +481,12 @@ class Database:
                     WHERE e.snapshot_path != ''
                       AND e.status IN ('confirmed', 'ignored')
                       AND NOT EXISTS (SELECT 1 FROM corrections c WHERE c.event_id = e.id)
-                    UNION ALL
-                    SELECT e.id, e.label AS bucket_label, e.snapshot_path, e.start_time
-                    FROM corrections c
-                    JOIN events e ON e.id = c.event_id
-                    WHERE e.snapshot_path != ''
-                      AND c.correct_label = c.original_label
-                      AND c.correct_label != 'false_positive'
-                ),
-                corrected AS (
-                    SELECT e.id, c.correct_label AS bucket_label, e.snapshot_path, e.start_time
-                    FROM corrections c
-                    JOIN events e ON e.id = c.event_id
-                    WHERE e.snapshot_path != ''
-                      AND c.correct_label != c.original_label
-                      AND c.correct_label != 'false_positive'
                 ),
                 ranked AS (
                     SELECT id, 'shared' AS bucket, bucket_label, ROW_NUMBER() OVER (
                         PARTITION BY bucket_label ORDER BY start_time DESC
                     ) AS rn
                     FROM pool
-                    UNION ALL
-                    SELECT id, 'corrected' AS bucket, bucket_label, ROW_NUMBER() OVER (
-                        PARTITION BY bucket_label ORDER BY start_time DESC
-                    ) AS rn
-                    FROM corrected
                 )
                 SELECT r.id, r.bucket, r.bucket_label, p.snapshot_path, r.rn
                 FROM ranked r
