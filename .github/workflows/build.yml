@@ -52,9 +52,15 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Requires a classic PAT with the write:packages scope stored as the
+      # GH_PACKAGES_TOKEN secret: the built-in GITHUB_TOKEN is an app token and
+      # cannot use the /user/packages endpoint. Non-fatal so a missing or
+      # under-scoped secret never fails the image build. Visibility only needs
+      # setting once; it persists across future pushes.
       - name: Make package public
+        continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
         run: |
           gh api --method PATCH \
             -H "Accept: application/vnd.github+json" \
