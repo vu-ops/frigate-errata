@@ -689,7 +689,8 @@ def run_training(
     )
     db.kv_set("last_model_created_at", str(time.time()))
     if training["auto_update_frigate_config"]:
-        update_frigate_config(cfg, db, str(dest))
+        backup_frigate_config(cfg, db, "pre-autoupdate")
+        update_frigate_config(cfg, db, frigate_published_model_path(cfg, dest.name))
     return {"model": str(dest), "device": device, "dataset": dataset}
 
 
