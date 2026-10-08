@@ -102,6 +102,8 @@ def create_app(config: dict) -> FastAPI:
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
     templates.env.filters["localts"] = format_ts
     templates.env.filters["humandur"] = format_duration
+    app_version = os.environ.get("ERRATA_VERSION", "").strip() or "dev"
+    templates.env.globals["app_version"] = app_version
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -414,6 +416,7 @@ def create_app(config: dict) -> FastAPI:
     def health():
         return {
             "ok": True,
+            "version": app_version,
             "time": time.time(),
             "last_scheduler_run": scheduler.last_run,
             "last_scheduler_stats": scheduler.last_stats,

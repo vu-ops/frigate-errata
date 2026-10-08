@@ -45,7 +45,7 @@ jobs:
           push: true
           build-args: |
             GPU_TYPE=xpu
-            VERSION=${{ steps.version.outputs.version }}
+            VERSION=${{ steps.version.outputs.tag }}
           tags: |
             ${{ env.IMAGE_BASE }}-xpu:${{ steps.version.outputs.tag }}
             ${{ env.IMAGE_BASE }}-xpu:latest

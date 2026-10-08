@@ -14,8 +14,9 @@ ARG GPU_TYPE=xpu
 # ROCm wheel index version, only used when GPU_TYPE=rocm. Match this to the
 # ROCm userspace version installed on the host.
 ARG ROCM_VERSION=6.4
-# App version, injected by CI from the VERSION file.
+# App version, injected by CI (the image tag, e.g. 0.1.10).
 ARG VERSION=0.0.0
+ENV ERRATA_VERSION=${VERSION}
 
 LABEL org.opencontainers.image.title="frigate-errata" \
       org.opencontainers.image.version="${VERSION}" \

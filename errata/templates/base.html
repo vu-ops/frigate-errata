@@ -11,6 +11,7 @@ body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background:
 header { display: flex; gap: 1.5rem; align-items: center; padding: 0.75rem 1.25rem; background: #161a22; border-bottom: 1px solid #232833; }
 header a { color: #9fb4ff; text-decoration: none; font-weight: 600; }
 header .brand { color: #fff; font-size: 1.05rem; letter-spacing: 0.02em; }
+header .version { color: #6b7488; font-size: 0.78rem; font-weight: 600; margin-left: -1rem; }
 main { padding: 1.25rem; max-width: 1400px; margin: 0 auto; }
 a { color: #9fb4ff; }
 .msg { background: #1d2b1f; border: 1px solid #2f5233; padding: 0.5rem 0.75rem; border-radius: 8px; margin-bottom: 1rem; font-size: 0.9rem; }
@@ -71,6 +72,7 @@ details table { margin: 0.4rem 0 0.2rem; }
 <body>
 <header>
   <span class="brand">Errata</span>
+  <span class="version" title="container version">v{{ app_version }}</span>
   <a href="{{ base }}/">Review queue</a>
   <a href="{{ base }}/summary">Summary</a>
   <a href="{{ base }}/synonyms">Synonyms</a>
