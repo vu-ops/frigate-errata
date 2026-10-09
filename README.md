@@ -134,15 +134,28 @@ Set `training.device` in `config.yaml` accordingly.
 > extra host setup beyond what Errata ships; issues and PRs from anyone who gets
 > them working are welcome.
 
-Build the image for a specific accelerator by passing the `GPU_TYPE` build arg:
+The image is built in two parts so per-commit builds stay fast:
+
+1. **Base image** (`Dockerfile.base`) — stock Python + system libs + the GPU
+   user-space and training stack (torch/ultralytics). Heavy (~8.7 GB) and rarely
+   changed; CI publishes it to GHCR and publishes a new tag only when
+   `BASE_VERSION` is bumped.
+2. **App image** (`Dockerfile`) — `FROM` the base and adds only the app deps and
+   code (a few tens of MB), so it builds in seconds.
+
+Build the base for a specific accelerator, then the app image on top:
 
 ```bash
-docker build --build-arg GPU_TYPE=cuda -t errata:local .   # NVIDIA
-docker build --build-arg GPU_TYPE=rocm -t errata:local .   # AMD
-docker build --build-arg GPU_TYPE=cpu  -t errata:local .   # CPU only
+# Base (pick one backend)
+docker build -f Dockerfile.base --build-arg GPU_TYPE=cuda -t errata-base:local .   # NVIDIA
+docker build -f Dockerfile.base --build-arg GPU_TYPE=rocm -t errata-base:local .   # AMD
+docker build -f Dockerfile.base --build-arg GPU_TYPE=cpu  -t errata-base:local .   # CPU only
+
+# App image on top of the base you just built
+docker build --build-arg BASE_IMAGE=errata-base:local -t errata:local .
 ```
 
-The default is `GPU_TYPE=xpu` (Intel). On a host without the matching hardware,
+The default backend is `xpu` (Intel). On a host without the matching hardware,
 PyTorch falls back to CPU at runtime.
 
 ## Training and deploying a model
@@ -169,8 +182,9 @@ PyTorch falls back to CPU at runtime.
    model:
      # path: plus://...            # previous model, kept for rollback
      path: /config/models/published/errata_<stamp>.onnx
-     width: 640
-     height: 640
+     width: 320                    # must match the model's training imgsz
+     height: 320                   # must match the model's training imgsz
+     input_tensor: nhwc            # Errata exports channels-last (NHWC)
      input_dtype: float
      labelmap_path: /config/models/published/labels.txt
      model_type: yolo-generic
@@ -180,13 +194,17 @@ PyTorch falls back to CPU at runtime.
    `POST /api/config/save?save_option=restart`.
 
    Frigate-version gotchas (verified on 0.18):
+   - `width`/`height` must match the image size the model was exported at
+     (`training.imgsz`, 320 or 640). Errata writes these automatically when it
+     activates a model; set them by hand only if you edit the config yourself.
    - `input_dtype` must be `float` — `float32` fails schema validation.
    - `model_type: yolo-generic` is required for Ultralytics YOLO exports (the
      default SSD parser rejects the `[1, classes+4, 8400]` head).
-   - The exported ONNX must accept NHWC input `(1, H, W, 3)`. Errata's trainer
-     and the Mac kit convert the export automatically (a Transpose is inserted
-     at the graph input). A hand-exported `model.export(format="onnx")` will
-     crash the Frigate detector — run it through the provided tooling.
+   - The exported ONNX must accept NHWC input `(1, H, W, 3)` — set
+     `input_tensor: nhwc`. Errata's trainer and the Mac kit convert the export
+     automatically (a Transpose is inserted at the graph input). A hand-exported
+     `model.export(format="onnx")` will crash the Frigate detector — run it
+     through the provided tooling.
 5. Validate: Frigate restarts, the log shows `Loading OpenVINO model ...` with
    no traceback, and `/api/stats` reports a finite `inference_speed`. Rollback =
    restore the commented model line and reload.
