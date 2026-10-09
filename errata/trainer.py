@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import random
 import re
 import shutil
@@ -571,6 +572,31 @@ def update_frigate_config(cfg: dict, db: Database, model_path: str) -> bool:
     return True
 
 
+def resolve_weights_path(use_model: str, training: dict) -> str:
+    """Return a loadable .pt path for a model variant.
+
+    Ultralytics downloads missing weights into the directory it is given, so we
+    must point it at a writable cache (the image's /app is read-only for the
+    service user). Prefer an existing cache entry, then a baked-in weight, then
+    the cache path as the download target.
+    """
+    cache_root = (
+        training.get("weights_dir")
+        or os.environ.get("YOLO_CONFIG_DIR")
+        or os.path.join(os.path.expanduser("~"), ".cache", "ultralytics")
+    )
+    cache_dir = Path(cache_root) / "weights"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    name = Path(use_model).stem if Path(use_model).suffix == ".pt" else Path(use_model).name
+    cached = cache_dir / f"{name}.pt"
+    if cached.is_file():
+        return str(cached)
+    baked = Path(f"{use_model}.pt")
+    if baked.is_file():
+        return str(baked.resolve())
+    return str(cached)
+
+
 def run_training(
     cfg: dict,
     db: Database,
@@ -602,7 +628,9 @@ def run_training(
             logger.debug("training progress callback failed", exc_info=True)
 
     def _train(device: str):
-        model = YOLO(f"{use_model}.pt")
+        weights = resolve_weights_path(use_model, training)
+        logger.info("loading base weights %s for %s on %s", weights, use_model, device)
+        model = YOLO(weights)
 
         def _on_train_start(trainer):
             emit(
