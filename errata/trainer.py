@@ -365,17 +365,28 @@ def patch_model_config(
     width: int | None = None,
     height: int | None = None,
     input_tensor: str | None = None,
+    extra: dict | None = None,
 ) -> tuple[str, bool]:
-    """Point the top-level ``model:`` block at a published model.
+    """Point the top-level ``model:`` block at a model.
 
-    Also keeps ``width``/``height`` in sync with the model's export size (Frigate
-    requires them to match the ONNX input) and sets the input tensor layout when
-    given. Missing keys are inserted after ``path``. Returns (text, changed);
-    changed is False when no model path block was found.
+    Keeps ``width``/``height`` in sync with the model's input size and sets the
+    input tensor layout, plus any ``extra`` keys (e.g. ``labelmap_path``,
+    ``input_dtype``, ``model_type``). Missing keys are inserted after ``path``.
+    Returns (text, changed); changed is False when no model path block was found.
     """
+    updates: dict[str, object] = {"path": model_path}
+    if width is not None:
+        updates["width"] = width
+    if height is not None:
+        updates["height"] = height
+    if input_tensor:
+        updates["input_tensor"] = input_tensor
+    if extra:
+        updates.update(extra)
+
     lines = config_text.splitlines(keepends=True)
     in_model = False
-    path_index = width_index = height_index = tensor_index = -1
+    key_index: dict[str, int] = {}
     for i, line in enumerate(lines):
         stripped = line.rstrip()
         if not stripped or stripped.lstrip().startswith("#"):
@@ -387,43 +398,29 @@ def patch_model_config(
         if not in_model:
             continue
         key = stripped.strip().split(":", 1)[0].strip()
-        if key == "path" and path_index < 0:
-            path_index = i
-        elif key == "width" and width_index < 0:
-            width_index = i
-        elif key == "height" and height_index < 0:
-            height_index = i
-        elif key == "input_tensor" and tensor_index < 0:
-            tensor_index = i
+        if key in updates and key not in key_index:
+            key_index[key] = i
 
-    if path_index < 0:
+    if "path" not in key_index:
         return config_text, False
 
-    indent = lines[path_index][: len(lines[path_index]) - len(lines[path_index].lstrip(" "))]
+    indent = lines[key_index["path"]][: len(lines[key_index["path"]]) - len(lines[key_index["path"]].lstrip(" "))]
 
     def set_line(idx: int, key: str, value) -> None:
         lines[idx] = f"{indent}{key}: {value}\n"
 
-    set_line(path_index, "path", model_path)
-    if width is not None and width_index >= 0:
-        set_line(width_index, "width", width)
-    if height is not None and height_index >= 0:
-        set_line(height_index, "height", height)
-    if input_tensor and tensor_index >= 0:
-        set_line(tensor_index, "input_tensor", input_tensor)
+    for key, value in updates.items():
+        if key in key_index:
+            set_line(key_index[key], key, value)
 
-    insert_at = path_index + 1
-    additions: list[tuple[str, object]] = []
-    if width is not None and width_index < 0:
-        additions.append(("width", width))
-    if height is not None and height_index < 0:
-        additions.append(("height", height))
-    if input_tensor and tensor_index < 0:
-        additions.append(("input_tensor", input_tensor))
-    for key, value in additions:
+    insert_at = key_index["path"] + 1
+    for key, value in updates.items():
+        if key in key_index:
+            continue
         lines.insert(insert_at, f"{indent}{key}: {value}\n")
         insert_at += 1
     return "".join(lines), True
+
 
 
 def model_imgsz(db: Database, model_name: str) -> int | None:

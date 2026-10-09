@@ -36,8 +36,14 @@
     <td>{{ m.imgsz or '—' }}</td>
     <td class="meta">{{ m.path or '(downloaded on demand)' }}</td>
     <td>
+      {% if m.format == 'onnx' and m.labels %}
+      <form method="post" action="{{ base }}/base-models/{{ m.name }}/activate" style="display:inline"
+            onsubmit="return confirm('Activate {{ m.name }} in Frigate?\n\nA config backup is saved, then Frigate is pointed at this model and restarts (detection pauses briefly).')">
+        <button class="primary" type="submit">Activate in Frigate</button>
+      </form>
+      {% endif %}
       {% if m.source in ('frigate_plus', 'upload') %}
-      <form method="post" action="{{ base }}/base-models/{{ m.name }}/delete" onsubmit="return confirm('Delete base model {{ m.name }}?')">
+      <form method="post" action="{{ base }}/base-models/{{ m.name }}/delete" style="display:inline" onsubmit="return confirm('Delete base model {{ m.name }}?')">
         <button class="warn" type="submit">Delete</button>
       </form>
       {% endif %}

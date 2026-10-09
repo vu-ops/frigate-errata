@@ -165,6 +165,24 @@ class TestBaseModels(Base):
         info = {"labelMap": {"2": "deer", "0": "person", "1": "dhl"}}
         self.assertEqual(basemodels._plus_label_list(info), ["person", "dhl", "deer"])
 
+    def test_model_layout_prefers_declared_meta(self):
+        row = {"meta": json.dumps({"inputShape": "nchw"})}
+        self.assertEqual(basemodels._model_layout(row, "/nonexistent.onnx"), "nchw")
+
+    def test_patch_model_config_sets_extra_keys(self):
+        text = "model:\n  path: /old.onnx\n  input_tensor: nhwc\n  width: 320\n"
+        new, changed = trainer.patch_model_config(
+            text, "/new.onnx", width=640, height=640, input_tensor="nchw",
+            extra={"labelmap_path": "/labels.txt", "input_dtype": "float", "model_type": "yolo-generic"},
+        )
+        self.assertTrue(changed)
+        self.assertIn("path: /new.onnx", new)
+        self.assertIn("input_tensor: nchw", new)
+        self.assertIn("width: 640", new)
+        self.assertIn("labelmap_path: /labels.txt", new)
+        self.assertIn("input_dtype: float", new)
+        self.assertIn("model_type: yolo-generic", new)
+
     def test_base_models_not_pruned_by_keep_versions(self):
         self.db.base_model_insert("custom", "upload", "pt", "/x/custom.pt")
         # keep_versions only touches published errata_*.onnx; base table intact

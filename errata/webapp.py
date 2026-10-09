@@ -556,6 +556,16 @@ def create_app(config: dict) -> FastAPI:
         msg = f"Deleted {name}" if result.get("ok") else f"Delete failed: {result.get('error')}"
         return RedirectResponse(f"{base}/base-models?msg={quote(msg)}", status_code=303)
 
+    @router.post("/base-models/{name}/activate")
+    def base_models_activate(name: str):
+        with deploy_lock:
+            result = basemodels.activate_base_model(config, db, name)
+        if result.get("ok"):
+            msg = f"Activated {name} in Frigate ({result.get('layout')} @ {result.get('imgsz')}px)"
+        else:
+            msg = f"Activate failed: {result.get('error')}"
+        return RedirectResponse(f"{base}/base-models?msg={quote(msg)}", status_code=303)
+
     # ---- snapshots / crop preview ------------------------------------------
 
     def _annotate(path: str, box: str, label: str) -> bytes | None:
