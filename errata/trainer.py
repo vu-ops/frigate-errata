@@ -364,10 +364,23 @@ def dataset_stats(cfg: dict) -> dict:
     return result
 
 
-def patch_model_path(config_text: str, model_path: str) -> tuple[str, bool]:
+def patch_model_config(
+    config_text: str,
+    model_path: str,
+    width: int | None = None,
+    height: int | None = None,
+    input_tensor: str | None = None,
+) -> tuple[str, bool]:
+    """Point the top-level ``model:`` block at a published model.
+
+    Also keeps ``width``/``height`` in sync with the model's export size (Frigate
+    requires them to match the ONNX input) and sets the input tensor layout when
+    given. Missing keys are inserted after ``path``. Returns (text, changed);
+    changed is False when no model path block was found.
+    """
     lines = config_text.splitlines(keepends=True)
     in_model = False
-    changed = False
+    path_index = width_index = height_index = tensor_index = -1
     for i, line in enumerate(lines):
         stripped = line.rstrip()
         if not stripped or stripped.lstrip().startswith("#"):
@@ -376,11 +389,62 @@ def patch_model_path(config_text: str, model_path: str) -> tuple[str, bool]:
         if indent == 0:
             in_model = stripped.rstrip(":").strip() == "model"
             continue
-        if in_model and re.match(r"^\s*path\s*:", line):
-            lines[i] = re.sub(r"path\s*:.*", f"path: {model_path}", line)
-            changed = True
-            break
-    return "".join(lines), changed
+        if not in_model:
+            continue
+        key = stripped.strip().split(":", 1)[0].strip()
+        if key == "path" and path_index < 0:
+            path_index = i
+        elif key == "width" and width_index < 0:
+            width_index = i
+        elif key == "height" and height_index < 0:
+            height_index = i
+        elif key == "input_tensor" and tensor_index < 0:
+            tensor_index = i
+
+    if path_index < 0:
+        return config_text, False
+
+    indent = lines[path_index][: len(lines[path_index]) - len(lines[path_index].lstrip(" "))]
+
+    def set_line(idx: int, key: str, value) -> None:
+        lines[idx] = f"{indent}{key}: {value}\n"
+
+    set_line(path_index, "path", model_path)
+    if width is not None and width_index >= 0:
+        set_line(width_index, "width", width)
+    if height is not None and height_index >= 0:
+        set_line(height_index, "height", height)
+    if input_tensor and tensor_index >= 0:
+        set_line(tensor_index, "input_tensor", input_tensor)
+
+    insert_at = path_index + 1
+    additions: list[tuple[str, object]] = []
+    if width is not None and width_index < 0:
+        additions.append(("width", width))
+    if height is not None and height_index < 0:
+        additions.append(("height", height))
+    if input_tensor and tensor_index < 0:
+        additions.append(("input_tensor", input_tensor))
+    for key, value in additions:
+        lines.insert(insert_at, f"{indent}{key}: {value}\n")
+        insert_at += 1
+    return "".join(lines), True
+
+
+def model_imgsz(db: Database, model_name: str) -> int | None:
+    """Look up the export image size recorded for a published model."""
+    wanted = Path(model_name).name
+    for version in db.model_versions(limit=200):
+        if Path(version["model_path"]).name != wanted:
+            continue
+        try:
+            metrics = json.loads(version["metrics"]) if version["metrics"] else {}
+        except (json.JSONDecodeError, TypeError):
+            metrics = {}
+        value = metrics.get("imgsz")
+        return int(value) if value else None
+    return None
+
 
 
 def current_model_path(config_text: str) -> str:
@@ -451,7 +515,12 @@ def activate_model(cfg: dict, db: Database, model_name: str) -> dict:
     client = FrigateClient(cfg["frigate"])
     current = client.get_config_text()
     frigate_path = frigate_published_model_path(cfg, safe_name)
-    patched, changed = patch_model_path(current, frigate_path)
+    size = model_imgsz(db, safe_name)
+    if size is None:
+        size = int(cfg["training"].get("imgsz", 320))
+    patched, changed = patch_model_config(
+        current, frigate_path, width=size, height=size, input_tensor="nhwc"
+    )
     if not changed:
         return {
             "ok": False,
@@ -555,14 +624,22 @@ def publish_model(cfg: dict, db: Database, onnx_path: Path, training_count: int,
     return dest
 
 
-def update_frigate_config(cfg: dict, db: Database, model_path: str) -> bool:
+def update_frigate_config(
+    cfg: dict,
+    db: Database,
+    model_path: str,
+    width: int | None = None,
+    height: int | None = None,
+) -> bool:
     client = FrigateClient(cfg["frigate"])
     try:
         current = client.get_config_text()
     except Exception:
         logger.exception("failed to fetch frigate config")
         return False
-    patched, changed = patch_model_path(current, model_path)
+    patched, changed = patch_model_config(
+        current, model_path, width=width, height=height, input_tensor="nhwc"
+    )
     if not changed:
         logger.error("could not find model path in frigate config, aborting update")
         return False
@@ -741,7 +818,9 @@ def run_training(
     db.kv_set("last_model_created_at", str(time.time()))
     if training["auto_update_frigate_config"]:
         backup_frigate_config(cfg, db, "pre-autoupdate")
-        update_frigate_config(cfg, db, frigate_published_model_path(cfg, dest.name))
+        update_frigate_config(
+            cfg, db, frigate_published_model_path(cfg, dest.name), width=use_imgsz, height=use_imgsz
+        )
     return {"model": str(dest), "device": device, "dataset": dataset}
 
 
