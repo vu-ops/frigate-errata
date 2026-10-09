@@ -19,15 +19,18 @@ from .vocab import effective_synonyms, label_in_text
 
 logger = logging.getLogger(__name__)
 
-# Model variants offered in the training UI. The yolo11 line is tested
-# end-to-end through the ONNX -> OpenVINO -> Frigate yolo-generic path; the
-# yolo12 entries export a compatible [1, 4+nc, 8400] head but are untested in
-# Frigate, so the UI flags them.
-MODEL_CHOICES = {
-    "tested": ["yolo11n", "yolo11s", "yolo11m", "yolo11l", "yolo11x"],
-    "untested": ["yolo12n", "yolo12s", "yolo12m", "yolo12l", "yolo12x"],
-}
-ALL_MODELS = [*MODEL_CHOICES["tested"], *MODEL_CHOICES["untested"]]
+# Model variants offered in the training UI. YOLOv9 and YOLO11 export the
+# Frigate-compatible [1, 4+nc, 8400] head; the yolo12 entries export the same
+# shape but are untested inside Frigate, so the UI flags them.
+MODEL_CHOICES = [
+    ("YOLOv9", ["yolov9t", "yolov9s", "yolov9m", "yolov9c", "yolov9e"]),
+    ("YOLO11", ["yolo11n", "yolo11s", "yolo11m", "yolo11l", "yolo11x"]),
+    ("YOLO12 (untested)", ["yolo12n", "yolo12s", "yolo12m", "yolo12l", "yolo12x"]),
+]
+ALL_MODELS = [model for _label, models in MODEL_CHOICES for model in models]
+
+# Inference/training image sizes offered in the UI.
+IMGSZ_CHOICES = [320, 640]
 
 
 def _select_pseudo_labels(cfg: dict, db: Database, class_map: dict) -> list:
@@ -112,13 +115,13 @@ def _region_crop(img, box, imgsz: int, min_side: int = 160):
     return crop, (bx, by, bw, bh)
 
 
-def export_dataset(cfg: dict, db: Database) -> dict:
+def export_dataset(cfg: dict, db: Database, imgsz: int | None = None) -> dict:
     labels = list(cfg["labels"]["track"])
     class_map = {name: idx for idx, name in enumerate(labels)}
     dataset_dir = Path(cfg["training"]["dataset_dir"])
     val_split = float(cfg["training"]["val_split"])
     region_crops = bool(cfg["training"].get("region_crops", True))
-    imgsz = int(cfg["training"]["imgsz"])
+    imgsz = int(imgsz or cfg["training"]["imgsz"])
 
     all_rows = db.corrections_unexported()
     positives = []
@@ -603,6 +606,7 @@ def run_training(
     device: str | None = None,
     on_progress=None,
     model_type: str | None = None,
+    imgsz: int | None = None,
 ) -> dict:
     import multiprocessing as mp
 
@@ -614,6 +618,7 @@ def run_training(
 
     training = cfg["training"]
     use_model = str(model_type or training["model_type"])
+    use_imgsz = int(imgsz or training["imgsz"])
     total_epochs = int(training["epochs"])
     requested_device = str(device) if device is not None else str(training.get("device", "cpu"))
     data_yaml = Path(training["dataset_dir"]) / "data.yaml"
@@ -685,7 +690,7 @@ def run_training(
         model.train(
             data=str(data_yaml),
             epochs=total_epochs,
-            imgsz=int(training["imgsz"]),
+            imgsz=use_imgsz,
             batch=int(training.get("batch", 16)) or 16,
             workers=int(training.get("workers", 8)),
             amp=bool(training.get("amp", False)),
@@ -708,14 +713,14 @@ def run_training(
 
     emit({"detail": "exporting onnx", "phase": "export"})
     best_weights = Path(model.trainer.best)
-    onnx_path = Path(model.export(format="onnx", imgsz=int(training["imgsz"])))
+    onnx_path = Path(model.export(format="onnx", imgsz=use_imgsz))
     onnx_path = convert_onnx_input_to_nhwc(onnx_path)
     emit({"detail": "publishing model", "phase": "publish"})
     dataset = dataset_stats(cfg)
     duration_seconds = round(time.time() - run_started, 1)
     metrics = {
         "epochs": total_epochs,
-        "imgsz": int(training["imgsz"]),
+        "imgsz": use_imgsz,
         "device": device,
         "model_type": use_model,
         "duration_seconds": duration_seconds,
@@ -878,7 +883,14 @@ def main() -> None:
     parser.add_argument(
         "--model",
         default=None,
-        help="model variant to train (e.g. yolo11n, yolo11s, yolo12n); defaults to training.model_type",
+        help="model variant to train (e.g. yolov9s, yolo11n, yolo12n); defaults to training.model_type",
+    )
+    parser.add_argument(
+        "--imgsz",
+        type=int,
+        default=None,
+        choices=IMGSZ_CHOICES,
+        help="training/export image size; defaults to training.imgsz",
     )
     args = parser.parse_args()
 
@@ -928,14 +940,14 @@ def main() -> None:
         logger.info("dataset wiped and exported flags reset")
 
     if args.export_only or args.rebuild or not args.train:
-        export_dataset(cfg, db)
+        export_dataset(cfg, db, imgsz=args.imgsz)
         return
 
     if not db.corrections_count():
         logger.info("no corrections collected yet, nothing to train on")
         return
-    export_dataset(cfg, db)
-    run_training(cfg, db, model_type=args.model)
+    export_dataset(cfg, db, imgsz=args.imgsz)
+    run_training(cfg, db, model_type=args.model, imgsz=args.imgsz)
 
 
 if __name__ == "__main__":

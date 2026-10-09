@@ -101,12 +101,14 @@ details table { margin: 0.4rem 0 0.2rem; }
   <a href="{{ base }}/synonyms">Synonyms</a>
   <a href="{{ base }}/api/train/mac-kit.zip">Mac kit</a>
   <select id="train-model" title="Model variant to train">
-    <optgroup label="YOLO11 (tested)">
-      {% for m in model_choices.tested %}<option value="{{ m }}" {% if m == default_model_type %}selected{% endif %}>{{ m }}</option>{% endfor %}
+    {% for group, models in model_choices %}
+    <optgroup label="{{ group }}">
+      {% for m in models %}<option value="{{ m }}" {% if m == default_model_type %}selected{% endif %}>{{ m }}{% if 'untested' in group %} ⚠ untested{% endif %}</option>{% endfor %}
     </optgroup>
-    <optgroup label="YOLO12 (untested)">
-      {% for m in model_choices.untested %}<option value="{{ m }}">{{ m }} ⚠ untested</option>{% endfor %}
-    </optgroup>
+    {% endfor %}
+  </select>
+  <select id="train-imgsz" title="Training / inference image size (smaller is faster, larger sees more detail)">
+    {% for s in imgsz_choices %}<option value="{{ s }}" {% if s == default_imgsz %}selected{% endif %}>{{ s }}</option>{% endfor %}
   </select>
   <button id="run-now" title="Fetch new events from Frigate and analyze them" onclick="runNow(this)">Fetch latest</button>
   <button id="train-btn" title="Retrain the model on the selected variant with collected corrections" onclick="startTrain(this)">Train</button>
@@ -210,14 +212,20 @@ async function startTrain(btn) {
   if (btn.disabled) return;
   var sel = document.getElementById('train-model');
   var model = sel ? sel.value : '';
+  var szel = document.getElementById('train-imgsz');
+  var imgsz = szel ? szel.value : '';
   var untested = model.indexOf('yolo12') === 0;
-  var prompt = 'Start a training run' + (model ? ' with ' + model : '') + '?';
+  var prompt = 'Start a training run' + (model ? ' with ' + model : '') + (imgsz ? ' at ' + imgsz + 'px' : '') + '?';
   if (untested) prompt += ' This model is UNTESTED with Frigate and may not load inside Frigate.';
   if (!confirm(prompt)) return;
   btn.disabled = true;
   btn.textContent = 'Training…';
   try {
-    var url = '{{ base }}/api/train' + (model ? '?model_type=' + encodeURIComponent(model) : '');
+    var params = new URLSearchParams();
+    if (model) params.set('model_type', model);
+    if (imgsz) params.set('imgsz', imgsz);
+    var qs = params.toString();
+    var url = '{{ base }}/api/train' + (qs ? '?' + qs : '');
     const r = await fetch(url, { method: 'POST' });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok) {

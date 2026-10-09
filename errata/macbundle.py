@@ -25,10 +25,10 @@ Usage: ./train-mac.sh
 Environment overrides:
   EPOCHS=100         training epochs
   BATCH=16           batch size (keep small on CPU)
-  IMGSZ=640          image size
+  IMGSZ=320          image size
   WORKERS=4          dataloader workers
   TRAIN_DEVICE=mps   mps on Apple Silicon (default), or cpu
-  MODEL_TYPE=yolo11n base model
+  MODEL_TYPE=yolov9s base model
   PYTHON=python3     interpreter used to create the venv
 USAGE
   exit 0
@@ -78,10 +78,10 @@ from ultralytics import YOLO
 
 device = os.environ.get("TRAIN_DEVICE", "mps")
 epochs = int(os.environ.get("EPOCHS", "100"))
-imgsz = int(os.environ.get("IMGSZ", "640"))
+imgsz = int(os.environ.get("IMGSZ", "320"))
 batch = int(os.environ.get("BATCH", "16"))
 workers = int(os.environ.get("WORKERS", "4"))
-model_type = os.environ.get("MODEL_TYPE", "yolo11n")
+model_type = os.environ.get("MODEL_TYPE", "yolov9s")
 
 import torch
 
@@ -225,8 +225,8 @@ Mac:
 
     TRAIN_DEVICE=cpu ./train-mac.sh
 
-The first run installs torch (~2 GB of wheels) and downloads `yolo11n.pt`
-(~6 MB). Later runs reuse `.venv/` and the Ultralytics cache.
+The first run installs torch (~2 GB of wheels) and downloads `yolov9s.pt`.
+Later runs reuse `.venv/` and the Ultralytics cache.
 
 Handy overrides:
 

@@ -105,10 +105,12 @@ def create_app(config: dict) -> FastAPI:
     app_version = os.environ.get("ERRATA_VERSION", "").strip() or "dev"
     templates.env.globals["app_version"] = app_version
 
-    from .trainer import MODEL_CHOICES
+    from .trainer import IMGSZ_CHOICES, MODEL_CHOICES
 
     templates.env.globals["model_choices"] = MODEL_CHOICES
-    templates.env.globals["default_model_type"] = str(config["training"].get("model_type", "yolo11n"))
+    templates.env.globals["default_model_type"] = str(config["training"].get("model_type", "yolov9s"))
+    templates.env.globals["imgsz_choices"] = IMGSZ_CHOICES
+    templates.env.globals["default_imgsz"] = int(config["training"].get("imgsz", 320))
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -488,14 +490,16 @@ def create_app(config: dict) -> FastAPI:
         "detail": "no training run yet",
         "phase": None,
         "model_type": None,
+        "imgsz": None,
         "epoch": None,
         "epochs": None,
         "progress": None,
         "metrics": None,
     }
 
-    def _train_worker(model_type: str | None = None) -> None:
+    def _train_worker(model_type: str | None = None, imgsz: int | None = None) -> None:
         chosen = model_type or str(config["training"]["model_type"])
+        chosen_imgsz = int(imgsz or config["training"]["imgsz"])
         train_state.update(
             {
                 "running": True,
@@ -505,6 +509,7 @@ def create_app(config: dict) -> FastAPI:
                 "detail": "training",
                 "phase": "starting",
                 "model_type": chosen,
+                "imgsz": chosen_imgsz,
                 "epoch": None,
                 "epochs": None,
                 "progress": None,
@@ -516,10 +521,15 @@ def create_app(config: dict) -> FastAPI:
 
             train_state["detail"] = "exporting dataset"
             train_state["phase"] = "exporting dataset"
-            exported = export_dataset(config, db)
+            exported = export_dataset(config, db, imgsz=imgsz)
             train_state["detail"] = "training"
             result = run_training(
-                config, db, device=None, on_progress=train_state.update, model_type=model_type
+                config,
+                db,
+                device=None,
+                on_progress=train_state.update,
+                model_type=model_type,
+                imgsz=imgsz,
             )
             result["exported"] = exported
             db.kv_set("last_train_at", str(time.time()))
@@ -546,12 +556,17 @@ def create_app(config: dict) -> FastAPI:
             )
 
     @router.post("/api/train")
-    def start_train(model_type: str = ""):
-        from .trainer import ALL_MODELS
+    def start_train(model_type: str = "", imgsz: int = 0):
+        from .trainer import ALL_MODELS, IMGSZ_CHOICES
 
         model_type = model_type.strip()
         if model_type and model_type not in ALL_MODELS:
             return JSONResponse({"ok": False, "detail": f"unknown model '{model_type}'"}, status_code=400)
+        if imgsz and imgsz not in IMGSZ_CHOICES:
+            return JSONResponse(
+                {"ok": False, "detail": f"unsupported imgsz '{imgsz}'; choose {IMGSZ_CHOICES}"},
+                status_code=400,
+            )
         if not config["training"].get("enabled", True):
             return JSONResponse(
                 {"ok": False, "detail": "training is disabled in this container; download the Mac kit or use deploy/train.sh"},
@@ -565,10 +580,18 @@ def create_app(config: dict) -> FastAPI:
                 status_code=503,
             )
         threading.Thread(
-            target=_train_worker, args=(model_type or None,), name="errata-train", daemon=True
+            target=_train_worker,
+            args=(model_type or None, imgsz or None),
+            name="errata-train",
+            daemon=True,
         ).start()
         return JSONResponse(
-            {"ok": True, "detail": "training started", "model_type": model_type or config["training"]["model_type"]},
+            {
+                "ok": True,
+                "detail": "training started",
+                "model_type": model_type or config["training"]["model_type"],
+                "imgsz": int(imgsz or config["training"]["imgsz"]),
+            },
             status_code=202,
         )
 
