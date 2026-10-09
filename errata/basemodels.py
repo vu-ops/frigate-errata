@@ -101,25 +101,57 @@ def import_frigate_plus(cfg: dict, db: Database, key: str, model_id) -> dict:
     (dest_dir / f"{name}.json").write_text(json.dumps(info, indent=2))
     size = onnx_input_size(str(dest))
     imgsz = size[0] if size else None
+    if imgsz is None:
+        imgsz = _plus_declared_size(info)
     labels = _write_plus_labels(dest_dir, name, info)
     db.base_model_insert(
         name=name, source="frigate_plus", fmt="onnx", path=str(dest),
         imgsz=imgsz, labels=labels, trainable=False,
-        meta=json.dumps({"model_id": model_id, "name": info.get("name")}),
+        meta=json.dumps({
+            "model_id": model_id,
+            "name": info.get("name"),
+            "inputShape": info.get("inputShape"),
+            "pixelFormat": info.get("pixelFormat"),
+            "inputDataType": info.get("inputDataType"),
+            "type": info.get("type"),
+        }),
     )
-    return {"ok": True, "name": name, "path": str(dest), "imgsz": imgsz, "info": info}
+    return {"ok": True, "name": name, "path": str(dest), "imgsz": imgsz,
+            "labels": labels, "info": info}
+
+
+def _plus_declared_size(info: dict) -> int | None:
+    for key in ("width", "height"):
+        value = info.get(key)
+        try:
+            if value:
+                return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _plus_label_list(info: dict) -> list[str] | None:
+    labels = info.get("labelMap") or info.get("labelmap") or info.get("labels")
+    if not labels:
+        return None
+    if isinstance(labels, dict):
+        try:
+            ordered = sorted(labels.items(), key=lambda kv: int(kv[0]))
+            return [str(v) for _k, v in ordered]
+        except (ValueError, TypeError):
+            return [str(v) for _k, v in labels.items()]
+    if isinstance(labels, list):
+        return [str(x) for x in labels]
+    return None
 
 
 def _write_plus_labels(dest_dir: Path, name: str, info: dict) -> str | None:
-    labels = info.get("labels") or info.get("labelmap")
+    labels = _plus_label_list(info)
     if not labels:
         return None
-    if isinstance(labels, list):
-        text = "\n".join(str(x) for x in labels) + "\n"
-    else:
-        text = str(labels)
     path = dest_dir / f"{name}.labels.txt"
-    path.write_text(text)
+    path.write_text("\n".join(labels) + "\n")
     return str(path)
 
 

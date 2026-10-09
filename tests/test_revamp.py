@@ -161,6 +161,10 @@ class TestBaseModels(Base):
         self.assertEqual(len(self.db.base_models()), n)
         self.assertGreater(n, 0)
 
+    def test_frigate_plus_labelmap_ordering(self):
+        info = {"labelMap": {"2": "deer", "0": "person", "1": "dhl"}}
+        self.assertEqual(basemodels._plus_label_list(info), ["person", "dhl", "deer"])
+
     def test_base_models_not_pruned_by_keep_versions(self):
         self.db.base_model_insert("custom", "upload", "pt", "/x/custom.pt")
         # keep_versions only touches published errata_*.onnx; base table intact
