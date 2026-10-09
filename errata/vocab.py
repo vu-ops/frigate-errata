@@ -45,10 +45,33 @@ def label_in_text(label: str, text: str, synonyms: dict | None = None) -> bool:
 
 
 def effective_synonyms(config: dict, db) -> dict:
+    """Baseline synonyms plus user additions (append, deduped).
+
+    The DB override stores only additions; the packaged/config baseline is
+    always preserved so built-in synonyms cannot be removed from the UI.
+    """
+    baseline = {
+        k: list(v) if isinstance(v, list) else v
+        for k, v in ((config.get("analysis", {}) or {}).get("synonyms", {}) or {}).items()
+    }
     raw = db.kv_get(SYNONYMS_OVERRIDE_KEY)
-    if raw is not None:
-        try:
-            return json.loads(raw) or {}
-        except json.JSONDecodeError:
-            pass
-    return dict((config.get("analysis", {}) or {}).get("synonyms", {}) or {})
+    if raw is None:
+        return baseline
+    try:
+        additions = json.loads(raw) or {}
+    except json.JSONDecodeError:
+        return baseline
+    for label, values in additions.items():
+        if not isinstance(values, list):
+            continue
+        existing = baseline.get(label)
+        if not isinstance(existing, list):
+            baseline[label] = list(values)
+            continue
+        seen = {str(v).strip().lower() for v in existing}
+        for value in values:
+            norm = str(value).strip().lower()
+            if norm and norm not in seen:
+                existing.append(value)
+                seen.add(norm)
+    return baseline

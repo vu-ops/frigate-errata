@@ -1,0 +1,683 @@
+database:
+  path: /data/errata.db
+frigate:
+  api_url: http://frigate:5000
+  username: ''
+  password: ''
+  request_timeout: 30
+  snapshot_dir: /data/snapshots
+  config_path: ''
+  backup_keep: 5
+harvest:
+  interval_minutes: 30
+  # 0 = train going forward only: the first run starts at "now" and never
+  # backfills history. Set >0 to opt into a one-time historical lookback.
+  lookback_hours: 0
+  min_confidence: 0.5
+  max_confidence: 0.95
+  max_events_per_run: 500
+  max_pages: 20
+analysis:
+  vocabulary_coherence: true
+  low_confidence_threshold: 0.75
+  confirm_on_coherent_description: true
+  auto_skip_implausible_boxes: true
+  oversized_box:
+    enabled: true
+    max_area: 0.4
+  safe_labels:
+  - person
+  - car
+  - truck
+  - bicycle
+  synonyms:
+    person:
+    - man
+    - woman
+    - child
+    - male
+    - female
+    - adult
+    - kid
+    - boy
+    - girl
+    - guy
+    - lady
+    - gentleman
+    - driver
+    - pedestrian
+    - courier
+    - worker
+    - delivery
+    - individual
+    - homeowner
+    - jogger
+    - shopper
+    - mailman
+    - mail carrier
+    - postman
+    - delivery driver
+    car:
+    - sedan
+    - suv
+    - coupe
+    - hatchback
+    - minivan
+    - convertible
+    - wagon
+    - golf cart
+    - pickup
+    - vehicle
+    - ford
+    - honda
+    - toyota
+    - hyundai
+    - kia
+    - chevrolet
+    - chevy
+    - lexus
+    - mazda
+    - acura
+    - tesla
+    - nissan
+    - subaru
+    - volkswagen
+    - vw
+    - bmw
+    - mercedes
+    - mercedes-benz
+    - audi
+    - dodge
+    - jeep
+    - chrysler
+    - buick
+    - cadillac
+    - gmc
+    - volvo
+    - mini
+    - porsche
+    - mitsubishi
+    - infiniti
+    - genesis
+    - jaguar
+    - land rover
+    - rivian
+    - polestar
+    - fiat
+    - saturn
+    - pontiac
+    - mercury
+    - scion
+    - suzuki
+    - hummer
+    - lincoln
+    - alfa romeo
+    - maserati
+    - bentley
+    - ferrari
+    - lamborghini
+    - mclaren
+    - aston martin
+    - lotus
+    - oldsmobile
+    - plymouth
+    - isuzu
+    - daihatsu
+    - civic
+    - accord
+    - crv
+    - cr-v
+    - pilot
+    - odyssey
+    - hr-v
+    - hrv
+    - passport
+    - ridgeline
+    - insight
+    - prologue
+    - element
+    - camry
+    - corolla
+    - prius
+    - rav4
+    - highlander
+    - tacoma
+    - tundra
+    - 4runner
+    - sienna
+    - avalon
+    - yaris
+    - venza
+    - sequoia
+    - land cruiser
+    - mustang
+    - escape
+    - focus
+    - fiesta
+    - fusion
+    - taurus
+    - explorer
+    - expedition
+    - edge
+    - flex
+    - bronco
+    - shelby
+    - maverick
+    - f-150
+    - f150
+    - f-250
+    - f250
+    - silverado
+    - malibu
+    - impala
+    - equinox
+    - tahoe
+    - suburban
+    - traverse
+    - camaro
+    - corvette
+    - colorado
+    - cruze
+    - sonic
+    - volt
+    - blazer
+    - trailblazer
+    - sonata
+    - elantra
+    - tucson
+    - santa fe
+    - accent
+    - veloster
+    - kona
+    - ioniq
+    - palisade
+    - venue
+    - optima
+    - forte
+    - rio
+    - soul
+    - sportage
+    - sorento
+    - telluride
+    - stinger
+    - k5
+    - carnival
+    - seltos
+    - niro
+    - altima
+    - sentra
+    - rogue
+    - pathfinder
+    - frontier
+    - maxima
+    - versa
+    - juke
+    - murano
+    - armada
+    - titan
+    - outback
+    - forester
+    - impreza
+    - crosstrek
+    - legacy
+    - ascent
+    - brz
+    - wrx
+    - golf
+    - jetta
+    - passat
+    - tiguan
+    - atlas
+    - beetle
+    - arteon
+    - gti
+    - model 3
+    - model y
+    - model s
+    - model x
+    - charger
+    - challenger
+    - durango
+    - journey
+    - caravan
+    - grand caravan
+    - avenger
+    - wrangler
+    - cherokee
+    - grand cherokee
+    - compass
+    - renegade
+    - gladiator
+    - liberty
+    - patriot
+    - sierra
+    - yukon
+    - canyon
+    - terrain
+    - acadia
+    - envoy
+    - escalade
+    - cts
+    - ats
+    - xts
+    - xt5
+    - xt4
+    - srx
+    - lacrosse
+    - encore
+    - enclave
+    - mazda3
+    - mazda6
+    - cx-5
+    - cx-9
+    - miata
+    - mx-5
+    - transit
+    - sprinter
+    - promaster
+    cat:
+    - feline
+    - kitten
+    - kitty
+    - tabby
+    - calico
+    - tortoiseshell
+    - tomcat
+    dog:
+    - canine
+    - dog
+    - hound
+    - mutt
+    - pooch
+    - pup
+    - puppy
+    - retriever
+    - shepherd
+    - mixed breed
+    - rescue
+    - stray
+    - golden retriever
+    - labrador
+    - lab
+    - labrador retriever
+    - goldador
+    - chesapeake bay retriever
+    - flat coated retriever
+    - nova scotia duck tolling retriever
+    - cocker spaniel
+    - english cocker spaniel
+    - american cocker spaniel
+    - springer spaniel
+    - english springer spaniel
+    - welsh springer spaniel
+    - cavalier king charles spaniel
+    - english toy spaniel
+    - boykin spaniel
+    - brittany
+    - english setter
+    - irish setter
+    - gordon setter
+    - german shepherd
+    - belgian malinois
+    - malinois
+    - belgian sheepdog
+    - australian shepherd
+    - aussie
+    - australian cattle dog
+    - blue heeler
+    - border collie
+    - collie
+    - rough collie
+    - bearded collie
+    - old english sheepdog
+    - sheepdog
+    - shetland sheepdog
+    - sheltie
+    - cardigan welsh corgi
+    - pembroke welsh corgi
+    - welsh corgi
+    - corgi
+    - terrier
+    - bull terrier
+    - staffordshire bull terrier
+    - staffie
+    - american pit bull terrier
+    - american staffordshire terrier
+    - amstaff
+    - pit bull
+    - pitbull
+    - american bully
+    - jack russell
+    - jack russell terrier
+    - rat terrier
+    - fox terrier
+    - boston terrier
+    - cairn terrier
+    - norfolk terrier
+    - scottish terrier
+    - scottie
+    - west highland white terrier
+    - westie
+    - yorkshire terrier
+    - yorkie
+    - silky terrier
+    - rottweiler
+    - rottie
+    - doberman
+    - doberman pinscher
+    - boxer
+    - great dane
+    - mastiff
+    - bullmastiff
+    - cane corso
+    - great pyrenees
+    - bernese mountain dog
+    - saint bernard
+    - st bernard
+    - newfoundland
+    - akita
+    - alaskan malamute
+    - malamute
+    - siberian husky
+    - husky
+    - samoyed
+    - keeshond
+    - schipperke
+    - komondor
+    - kuvasz
+    - portuguese water dog
+    - rhodesian ridgeback
+    - ridgeback
+    - vizsla
+    - weimaraner
+    - giant schnauzer
+    - schnauzer
+    - norwegian elkhound
+    - beagle
+    - basset hound
+    - bloodhound
+    - coonhound
+    - bluetick coonhound
+    - redbone coonhound
+    - greyhound
+    - italian greyhound
+    - whippet
+    - saluki
+    - basenji
+    - dachshund
+    - wiener dog
+    - chihuahua
+    - pomeranian
+    - pug
+    - puggle
+    - maltese
+    - bichon frise
+    - bichon
+    - havanese
+    - shih tzu
+    - lhasa apso
+    - pekingese
+    - papillon
+    - japanese chin
+    - chinese crested
+    - brussels griffon
+    - miniature pinscher
+    - miniature schnauzer
+    - toy poodle
+    - miniature poodle
+    - standard poodle
+    - poodle
+    - bulldog
+    - english bulldog
+    - french bulldog
+    - frenchie
+    - american bulldog
+    - american eskimo
+    - dalmatian
+    - shar pei
+    - shiba inu
+    - shiba
+    - chow chow
+    - german shorthaired pointer
+    - german wirehaired pointer
+    - doodle
+    - goldendoodle
+    - labradoodle
+    - bernedoodle
+    - norwegian lundehund
+    bird:
+    - crow
+    - raven
+    - owl
+    - sparrow
+    - hawk
+    - songbird
+    - robin
+    - pigeon
+    - dove
+    - finch
+    - cardinal
+    - quail
+    - blue jay
+    - duck
+    - goose
+    - chicken
+    - hen
+    - rooster
+    - chick
+    - eagle
+    - hummingbird
+    - woodpecker
+    deer:
+    - buck
+    - doe
+    - fawn
+    - elk
+    - stag
+    - yearling
+    - moose
+    fox:
+    - vixen
+    coyote:
+    - coywolf
+    - coydog
+    - wolf
+    rabbit:
+    - bunny
+    - hare
+    - cottontail
+    raccoon: []
+    possum:
+    - opossum
+    skunk: []
+    squirrel: []
+    rodent:
+    - mouse
+    - mice
+    - rat
+    - chipmunk
+    - gopher
+    - vole
+    horse:
+    - pony
+    - foal
+    - mare
+    - stallion
+    - colt
+    - gelding
+    - donkey
+    - mule
+    - burro
+    package:
+    - box
+    - parcel
+    - envelope
+    - cardboard
+    - mail
+    - shipment
+    garbage_truck:
+    - trash truck
+    - waste truck
+    - recycling truck
+    - garbage collection
+    - greenwaste
+    - refuse truck
+    boat:
+    - vessel
+    - watercraft
+    - canoe
+    - kayak
+    - rowboat
+    - pontoon
+    - sailboat
+    - motorboat
+    license_plate:
+    - plate
+    - plates
+    - number plate
+    - license tag
+    usps:
+    - mail truck
+    - postal truck
+    - postal van
+    - mail van
+    - postal service
+    - united states postal service
+    ups:
+    - united parcel service
+    - ups truck
+    - ups van
+    fedex:
+    - federal express
+    - fedex truck
+    - fedex van
+    - fedex ground
+    - fedex express
+    amazon:
+    - amazon truck
+    - amazon van
+    - amazon prime
+    - prime van
+    - amazon delivery
+    dhl:
+    - dhl truck
+    - dhl van
+    gls:
+    - gls truck
+    - gls van
+    delivery_truck:
+    - delivery truck
+    - delivery van
+    - delivery vehicle
+    - box truck
+    - parcel truck
+    - package truck
+    - courier truck
+    - courier van
+    - freight truck
+    - step van
+    - cargo van
+    - route truck
+  suggestion_groups:
+    animal:
+    - cat
+    - dog
+    - deer
+    - fox
+    - rabbit
+    - raccoon
+    - bird
+    - possum
+    - skunk
+    - squirrel
+    - rodent
+    - horse
+    vehicle:
+    - car
+    - garbage_truck
+    - boat
+    - delivery_truck
+    person:
+    - person
+    object:
+    - package
+  noise:
+    count: 10
+    window_hours: 1
+review:
+  auto_keep_per_label: 150
+  queue_limit: 200
+notifications:
+  enabled: false
+  discord_webhook: ''
+labels:
+  # Object detector classes only. Brand labels (usps/ups/fedex/...) and
+  # license_plate are NOT classes -- they are attributes (see `attributes`).
+  # Order defines YOLO class indices and labels.txt order.
+  track:
+  - car
+  - cat
+  - dog
+  - person
+  - deer
+  - horse
+  - fox
+  - coyote
+  - rabbit
+  - raccoon
+  - bird
+  - possum
+  - skunk
+  - squirrel
+  - rodent
+  - package
+  - garbage_truck
+  - boat
+  - delivery_truck
+  # Brand/attribute tags. Metadata only: reviewed as a separate queue item and
+  # never trained as a detector class. Populated from Frigate attributes.
+  attributes:
+  - usps
+  - ups
+  - fedex
+  - amazon
+  - dhl
+  - gls
+  # Per-label control defaults. Empty means built-in defaults apply (see
+  # controls.defaults below); a reset switches everything to disabled.
+  controls:
+    defaults:
+      collect_mode: all
+      search: false
+      include_training: true
+      auto_confirm: true
+      pseudo_labels: true
+    reset_disabled: true
+training:
+  enabled: true
+  trigger_threshold: 50
+  dataset_dir: /data/dataset
+  model_output_dir: /data/models
+  publish_dir: /publish
+  base_dir: /data/base
+  keep_versions: 20
+  model_type: yolov9s
+  epochs: 100
+  imgsz: 320
+  batch: 16
+  amp: false
+  workers: 4
+  device: cpu
+  val_split: 0.1
+  region_crops: true
+  auto_update_frigate_config: false
+  pseudo_labels:
+    enabled: true
+    per_camera_label_day: 3
+    max_per_class: 250
+server:
+  listen_host: 0.0.0.0
+  listen_port: 8501
+  base_path: /errata
+logging:
+  level: INFO

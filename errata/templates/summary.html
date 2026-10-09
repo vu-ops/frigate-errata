@@ -9,6 +9,20 @@
   <div class="stat"><div class="n">{{ corrections_total }}</div><div class="t">Corrections total</div></div>
 </div>
 
+<div class="section-title">Brand review</div>
+{% if brand_counts %}
+<div class="stat-grid">
+  {% for status, n in brand_counts.items() | sort %}
+  <div class="stat"><div class="n">{{ n }}</div><div class="t">brands {{ status }}</div></div>
+  {% endfor %}
+</div>
+{% endif %}
+<table>
+  <tr><th>Brand</th><th>Items</th></tr>
+  {% for row in brands_by_brand %}<tr><td><span class="badge brand">{{ row.brand }}</span></td><td class="n">{{ row.n }}</td></tr>{% endfor %}
+  {% if not brands_by_brand %}<tr><td colspan="2" class="empty">No brand items yet.</td></tr>{% endif %}
+</table>
+
 <div class="section-title">Retrain progress</div>
 <div>{{ since_count }} / {{ threshold }} corrections since last model</div>
 <div class="progress"><div class="fill" style="width: {{ [since_count / threshold * 100, 100] | min }}%"></div></div>
@@ -170,6 +184,61 @@
   }
   load();
 })();
+</script>
+
+<div class="section-title">Reset — start over</div>
+<div class="msg hint">
+  Deletes <strong>all</strong> events, snapshots, corrections, brand items, labels
+  controls, dataset, published models, and Frigate config backups, and disables
+  every per-label control so you can focus on one label at a time. Base models
+  are kept. Optionally point Frigate at a base or kept trained model first, then
+  one final Frigate config backup is saved. This cannot be undone.
+</div>
+<form id="reset-form" onsubmit="return doReset(event)">
+  <div class="actions">
+    <label>Return to model (optional)
+      <select id="reset-model">
+        <option value="">— none —</option>
+      </select>
+    </label>
+    <input type="text" id="reset-confirm" placeholder="type RESET to confirm" autocomplete="off">
+    <button class="warn" type="submit">Reset everything</button>
+  </div>
+</form>
+<div id="reset-result" class="meta"></div>
+<script>
+(function () {
+  var sel = document.getElementById('reset-model');
+  if (!sel) return;
+  fetch('{{ base }}/api/models').then(function (r) { return r.json(); }).then(function (d) {
+    (d.models || []).forEach(function (m) {
+      var o = document.createElement('option');
+      o.value = m.name; o.textContent = m.name;
+      sel.appendChild(o);
+    });
+  }).catch(function () {});
+})();
+async function doReset(e) {
+  e.preventDefault();
+  var confirmText = document.getElementById('reset-confirm').value;
+  var model = document.getElementById('reset-model').value;
+  if (confirmText !== 'RESET') { alert('Type RESET to confirm.'); return false; }
+  if (!window.confirm('Delete ALL training and review data? This cannot be undone.')) return false;
+  var out = document.getElementById('reset-result');
+  out.textContent = 'Resetting…';
+  try {
+    var r = await fetch('{{ base }}/api/reset', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({confirm: confirmText, return_model: model})
+    });
+    var j = await r.json();
+    out.textContent = j.ok ? 'Reset complete.' : ('Reset failed: ' + (j.error || r.status));
+    if (j.ok) setTimeout(function () { location.href = '{{ base }}/'; }, 1200);
+  } catch (err) {
+    out.textContent = 'Reset failed: ' + err;
+  }
+  return false;
+}
 </script>
 
 <div class="section-title">Training</div>

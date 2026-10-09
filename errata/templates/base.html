@@ -31,6 +31,7 @@ button.warn { background: #7a2e2e; border-color: #8f3b3b; color: #fff; }
 .meta { font-size: 0.8rem; color: #8a93a6; display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
 .badge { padding: 0.1rem 0.5rem; border-radius: 99px; font-size: 0.72rem; font-weight: 600; border: 1px solid transparent; white-space: nowrap; }
 .badge.mismatch { background: #4a1f1f; color: #ff9d9d; border-color: #7a2e2e; }
+.badge.candidate { background: #2f1c4a; color: #c9a8ff; border-color: #5c4273; }
 .badge.low_confidence { background: #46351a; color: #ffd58a; border-color: #6d5424; }
 .badge.noise { background: #1c3350; color: #9ec1ff; border-color: #2b4a73; }
 .badge.oversized { background: #46321c; color: #ffc49d; border-color: #7a4a2e; }
@@ -90,6 +91,12 @@ details table { margin: 0.4rem 0 0.2rem; }
 .be-h[data-dir="w"] { left: 0; top: 50%; cursor: ew-resize; }
 .be-actions { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
 .be-actions select { min-width: 9rem; }
+.badge.brand { background: #3a2b12; color: #ffd58a; border-color: #6d5424; }
+.chip.confirm { background: #1d3b25; color: #a8e6b8; border: 1px solid #2f5233; }
+.chip.reject { background: #4a1f1f; color: #ff9d9d; border: 1px solid #7a2e2e; }
+.section-head { font-size: 1rem; color: #fff; margin: 1.75rem 0 0.5rem; }
+.crop-thumb img { max-width: 320px; }
+label.inline { flex-direction: row; align-items: center; gap: 0.35rem; text-transform: none; font-size: 0.85rem; color: #c9d1e0; }
 </style>
 </head>
 <body>
@@ -98,6 +105,8 @@ details table { margin: 0.4rem 0 0.2rem; }
   <span class="version" title="container version">v{{ app_version }}</span>
   <a href="{{ base }}/">Review queue</a>
   <a href="{{ base }}/summary">Summary</a>
+  <a href="{{ base }}/controls">Controls</a>
+  <a href="{{ base }}/base-models">Base models</a>
   <a href="{{ base }}/synonyms">Synonyms</a>
   <a href="{{ base }}/api/train/mac-kit.zip">Mac kit</a>
   <select id="train-model" title="Model variant to train">

@@ -1,5 +1,15 @@
 # Errata Configuration Reference
 
+> **v0.2 breaking changes.** Config is now layered: the container ships the full
+> baseline at `errata/settings.yaml`, and your `config.yaml` only overrides the
+> keys you change. Object classes (`labels.track`) exclude brands
+> (`labels.attributes`: usps, ups, fedex, amazon, dhl, gls) and `license_plate`
+> — those are attributes/metadata, never detector classes. Synonym lists are
+> append-only (baseline + your additions). `harvest.lookback_hours` defaults to
+> `0` (train going forward). Use **Reset** (Summary page) or
+> `python -m errata.trainer --reset` to start over; existing data/models are
+> incompatible.
+
 Everything needed to configure, operate, and re-deploy Errata on a fresh
 host. The tool is fully self-contained in the project folder — copy it, point
 it at your Frigate, build, and go.
@@ -383,6 +393,11 @@ else to do. Otherwise create a wrapper unit or just use
 | `POST /errata/api/models/activate` | Body `{"model": "errata_<stamp>.onnx"}`. Backs up the Frigate config, patches the model path via the Frigate API, saves with `save_option=restart`, waits for Frigate to return |
 | `POST /errata/api/models/backups/<id>/revert` | Restore a previous Frigate config backup (a fresh backup of the current config is taken first), then restart Frigate |
 | `GET /errata/api/dataset/stats` | Summarize the on-disk YOLO dataset (human/pseudo images and objects, backgrounds, per-class train/val counts); the summary page renders this and warns when unexported corrections are not yet in the dataset |
+| `GET /errata/controls` / `POST /errata/controls` / `POST /errata/controls/bulk` | Per-label controls: collect mode (`all`/`review_only`/`off`), search, include_training, auto_confirm, pseudo_labels; bulk-apply per column |
+| `POST /errata/brand/{id}` / `POST /errata/brands/bulk` | Confirm/reject a brand review item (metadata only) |
+| `GET /errata/api/snapshots/{id}/crop.jpg` | The actual training crop for an event (matches the trainer's region crop) |
+| `GET /errata/base-models` / `POST /errata/base-models/import-plus` / `POST /errata/base-models/upload` / `POST /errata/base-models/{name}/delete` | Base-model registry, Frigate+ import (one-time key), uploads |
+| `POST /errata/api/reset` | Body `{"confirm": "RESET", "return_model": "<optional published model>"}`. Wipes all learned/review data + files, disables all label controls (base models kept), optionally re-activates a kept model, then saves a final Frigate config backup |
 | `GET /errata/api/train/status` | Training job state (running / finished / error + detail); also shown on the Summary page |
 | `GET /errata/api/train/mac-kit.zip` | Download the Mac training kit: dataset, source files, `train-mac.sh`, and a README with Homebrew setup; refreshes the dataset export first. Also linked as "Mac kit" in the header |
 | `GET /healthz` | Unprefixed health endpoint (used by the Docker healthcheck) |
@@ -438,7 +453,14 @@ SQLite, WAL mode.
   `correct_label` (target class or `false_positive`), `original_label`,
   `confidence`, `camera`, `box`, `collected_at`, `exported`.
 - **model_versions** — `model_path`, `created_at`, `training_count`, `metrics`.
-- **config** — key/value (progress markers like `last_processed_at`).
+- **event_brands** — brand review items: `event_id`, `brand`, `source`, `model`,
+  `score`, `status` (`pending|confirmed|rejected`), `reviewed_at`, `created_at`.
+- **label_settings** — per-label controls: `label`, `collect_mode`, `search`,
+  `include_training`, `auto_confirm`, `pseudo_labels`, `updated_at`.
+- **base_models** — `name`, `source` (`yolo|frigate_plus|upload`), `format`
+  (`pt|onnx`), `path`, `imgsz`, `labels`, `trainable`, `meta`, `created_at`.
+- **config** — key/value (progress markers, `synonyms_override`,
+  `controls_default_disabled`).
 
 Indexes: `events(status)`, `events(camera,label)`, `events(start_time)`,
 `corrections(exported)`, `corrections(correct_label)`.

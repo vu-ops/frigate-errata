@@ -1,5 +1,12 @@
 # Errata
 
+> **v0.2 is a breaking release — start over.** The detector class taxonomy
+> changed: brands (usps, ups, fedex, amazon, dhl, gls) and `license_plate` are no
+> longer detector classes (they are attributes/metadata), and the packaged
+> defaults now live in `errata/settings.yaml`. Existing databases, datasets, and
+> models are incompatible — use the **Reset** button (or `python -m errata.trainer
+> --reset`) to wipe learned data and begin again from a base model.
+
 Active-learning pipeline for [Frigate](https://frigate.video). Errata harvests
 Frigate events, flags likely detector mistakes (false positives,
 label/description mismatches, low-confidence noise bursts), lets you correct
@@ -62,17 +69,55 @@ Frigate API ──▶ harvester ──▶ SQLite ──▶ analyzer ──▶ re
 
 ## Features
 
-- Automated review queue with priority ordering
+- Automated review queue with priority ordering, split into independent
+  **object** and **brand** items
+- **Brands as attributes** (usps, fedex, …) — reviewed separately, never trained
+  as detector classes (a USPS van is `car` + brand `usps`)
+- **Candidate search** — flag a new label (e.g. coyote) and Errata scans GenAI
+  descriptions for its synonyms, surfacing matches for review so you can grow the
+  label before enabling training
+- **Per-label controls** — collect mode, search, train/collect-only,
+  auto-confirm, pseudo-labels, with bulk apply
 - Synonym-aware label/description mismatch detection (configurable per class)
 - Noise-burst, low-confidence, and oversized/merged-box detection
-- In-browser box editor: move, resize, or draw the training box on any event
-- Train-button model picker: choose a YOLO11 variant (tested) or YOLO12 (flagged
-  untested) per run, without editing config
+- In-browser box editor + **training-crop preview** (the exact crop the model
+  learns from; Edit opens the full frame to re-crop)
+- **Base models**: packaged YOLO 9/11/12 variants, uploads, and one-click
+  Frigate+ model import (deploy-only)
+- **Reset / start over** — wipe all learned data and controls with one action
 - Three training paths: in-app button, CLI, or a Mac/Colab kit
 - Optional automatic deployment of the trained model into Frigate's config
   (with backup + rollback)
 - Snapshot retention/pruning with per-label budgets
 - Prefix-aware web UI, designed to sit behind your existing reverse proxy
+
+## Labels: objects, brands, and candidates
+
+- **Object classes** (`labels.track` in `errata/settings.yaml`) are the only
+  YOLO classes. Order defines class indices and `labels.txt`.
+- **Brand attributes** (`labels.attributes`) are metadata: a delivery van is
+  detected as `car` and separately carries a brand item (`usps`). Brands are
+  never detector classes, so a class can't mix person-shaped and van-shaped
+  boxes.
+- **Candidates** are object classes with `include_training` off and `search` on.
+  While search is on, the analyzer scans GenAI descriptions of new events for the
+  label's synonyms (across all detector labels) and surfaces matches as normal
+  review items — the way to build up a new label like `coyote` before training
+  it. Turn `include_training` on when you have enough samples; class indices
+  change, so retrain.
+
+Per-label controls live on the **Controls** page (collect mode, search,
+train/collect-only, auto-confirm, pseudo-labels). A candidate hit always
+surfaces, overriding the detected label's auto-confirm.
+
+## Reset / start over
+
+The Summary page's **Reset** action deletes all events, snapshots, corrections,
+brand items, label controls, the dataset, published models, and Frigate config
+backups, then disables every per-label control so you can focus one label at a
+time. Base models are kept. Optionally point Frigate at a base or kept trained
+model first; one final Frigate config backup is saved afterward. CLI equivalent:
+`python -m errata.trainer --reset`.
 
 ## Quick start
 
@@ -92,13 +137,18 @@ auto-confirmed by description and wait in the review queue for a human.
    (`ERRATA_FRIGATE_USER` / `ERRATA_FRIGATE_PASSWORD`). If Frigate has no auth,
    leave both empty (a `.env` file must still exist if the compose snippet
    references it).
-3. **Configure** `config.yaml`:
+3. **Configure** `config.yaml` (a thin override file — the container ships the
+   full baseline at `errata/settings.yaml`, so list only what you change):
    - `frigate.api_url` must resolve from the Errata container. The default
      `http://frigate:5000` assumes the Frigate compose service is named
      `frigate` on the same network.
    - `server.base_path` must match your nginx location prefix (default `/errata`).
-   - `labels.track` lists the object classes your cameras detect — it drives the
-     review UI, the exported dataset, and `labels.txt`.
+   - `harvest.lookback_hours` defaults to `0` — Errata trains *going forward*
+     and never backfills history unless you opt in with a positive value.
+   - `labels.track` / `labels.attributes` in `settings.yaml` list object classes
+     and brand attributes; `labels.track` order drives the exported dataset and
+     `labels.txt`. Synonym lists are **appended** (your entries plus the
+     packaged baseline).
 4. **Compose service** — copy the `errata:` service from
    `deploy/docker-compose.snippet.yml` into the compose project that runs
    Frigate and replace the `/path/to/errata-app` placeholders. If Frigate runs

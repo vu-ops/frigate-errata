@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS events (
     flag_reason TEXT,
     priority INTEGER DEFAULT 0,
     suggested_label TEXT NOT NULL DEFAULT '',
+    sub_label TEXT NOT NULL DEFAULT '',
     created_at REAL NOT NULL,
     reviewed_at REAL
 );
@@ -63,6 +64,44 @@ CREATE TABLE IF NOT EXISTS frigate_backups (
     model_path TEXT NOT NULL,
     file_path TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS event_brands (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL,
+    brand TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'frigate',
+    model TEXT,
+    score REAL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    reviewed_at REAL,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_event_brands_status ON event_brands(status);
+CREATE INDEX IF NOT EXISTS idx_event_brands_event ON event_brands(event_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_event_brands_unique ON event_brands(event_id, brand);
+
+CREATE TABLE IF NOT EXISTS label_settings (
+    label TEXT PRIMARY KEY,
+    collect_mode TEXT NOT NULL DEFAULT 'all',
+    search INTEGER NOT NULL DEFAULT 0,
+    include_training INTEGER NOT NULL DEFAULT 1,
+    auto_confirm INTEGER NOT NULL DEFAULT 1,
+    pseudo_labels INTEGER NOT NULL DEFAULT 1,
+    updated_at REAL
+);
+
+CREATE TABLE IF NOT EXISTS base_models (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    source TEXT NOT NULL,
+    format TEXT NOT NULL,
+    path TEXT,
+    imgsz INTEGER,
+    labels TEXT,
+    trainable INTEGER NOT NULL DEFAULT 1,
+    meta TEXT,
+    created_at REAL NOT NULL
+);
 """
 
 class Database:
@@ -79,6 +118,8 @@ class Database:
             conn.execute(
                 "ALTER TABLE events ADD COLUMN suggested_label TEXT NOT NULL DEFAULT ''"
             )
+        if "sub_label" not in cols:
+            conn.execute("ALTER TABLE events ADD COLUMN sub_label TEXT NOT NULL DEFAULT ''")
 
     @contextmanager
     def connect(self):
@@ -108,8 +149,8 @@ class Database:
                 """
                 INSERT OR IGNORE INTO events
                     (id, camera, label, confidence, description, attributes,
-                     start_time, end_time, box, snapshot_path, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?)
+                     start_time, end_time, box, snapshot_path, status, sub_label, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?)
                 """,
                 (
                     event["id"],
@@ -122,6 +163,7 @@ class Database:
                     event.get("end_time"),
                     event.get("box"),
                     event.get("snapshot_path"),
+                    event.get("sub_label") or "",
                     time.time(),
                 ),
             )
@@ -380,6 +422,7 @@ class Database:
     def delete_event(self, event_id: str) -> None:
         with self.connect() as conn:
             conn.execute("DELETE FROM corrections WHERE event_id = ?", (event_id,))
+            conn.execute("DELETE FROM event_brands WHERE event_id = ?", (event_id,))
             conn.execute("DELETE FROM events WHERE id = ?", (event_id,))
 
     def purge_missing_snapshots(self) -> int:
@@ -387,7 +430,8 @@ class Database:
 
         Covers both cleared paths (nightly retention sets snapshot_path = '')
         and stale paths whose file no longer exists, so the queue and dataset
-        never reference images that cannot be shown or trained on.
+        never reference images that cannot be shown or trained on. Cascades to
+        corrections and brand review rows.
         """
         with self.connect() as conn:
             rows = conn.execute("SELECT id, snapshot_path FROM events").fetchall()
@@ -400,6 +444,7 @@ class Database:
                 chunk = ids[i:i + 500]
                 marks = ",".join("?" * len(chunk))
                 conn.execute(f"DELETE FROM corrections WHERE event_id IN ({marks})", chunk)
+                conn.execute(f"DELETE FROM event_brands WHERE event_id IN ({marks})", chunk)
                 conn.execute(f"DELETE FROM events WHERE id IN ({marks})", chunk)
         return len(ids)
 
@@ -495,6 +540,209 @@ class Database:
                 """,
                 (keep_per_label,),
             ).fetchall()
+
+    # ---- brand review items -------------------------------------------------
+
+    def insert_brand(self, event_id: str, brand: str, source: str = "frigate",
+                     model: str | None = None, score: float | None = None) -> None:
+        if not event_id or not brand:
+            return
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO event_brands
+                    (event_id, brand, source, model, score, status, created_at)
+                VALUES (?, ?, ?, ?, ?, 'pending', ?)
+                """,
+                (event_id, brand, source, model, score, time.time()),
+            )
+
+    def brands_for_event(self, event_id: str) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return conn.execute(
+                "SELECT * FROM event_brands WHERE event_id = ? ORDER BY brand", (event_id,)
+            ).fetchall()
+
+    def brand_queue(self, status: str = "pending", brand: str | None = None,
+                    camera: str | None = None, limit: int = 200) -> list[sqlite3.Row]:
+        where = []
+        params: list = []
+        if status and status != "all":
+            where.append("eb.status = ?")
+            params.append(status)
+        if brand:
+            where.append("eb.brand = ?")
+            params.append(brand)
+        if camera:
+            where.append("e.camera = ?")
+            params.append(camera)
+        clause = f" WHERE {' AND '.join(where)}" if where else ""
+        sql = (
+            "SELECT eb.*, e.camera, e.label AS object_label, e.box, e.snapshot_path, "
+            "e.confidence, e.start_time, e.description "
+            "FROM event_brands eb JOIN events e ON e.id = eb.event_id"
+            + clause
+            + " ORDER BY eb.created_at DESC LIMIT ?"
+        )
+        params.append(limit)
+        with self.connect() as conn:
+            return conn.execute(sql, params).fetchall()
+
+    def brand_count(self, status: str = "pending") -> int:
+        with self.connect() as conn:
+            if status == "all":
+                row = conn.execute("SELECT COUNT(*) AS n FROM event_brands").fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT COUNT(*) AS n FROM event_brands WHERE status = ?", (status,)
+                ).fetchone()
+        return row["n"]
+
+    def brands_by_status(self) -> dict:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT status, COUNT(*) AS n FROM event_brands GROUP BY status"
+            ).fetchall()
+        return {row["status"]: row["n"] for row in rows}
+
+    def brands_by_brand(self, status: str | None = None) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            if status:
+                return conn.execute(
+                    "SELECT brand, COUNT(*) AS n FROM event_brands WHERE status = ? "
+                    "GROUP BY brand ORDER BY n DESC",
+                    (status,),
+                ).fetchall()
+            return conn.execute(
+                "SELECT brand, COUNT(*) AS n FROM event_brands GROUP BY brand ORDER BY n DESC"
+            ).fetchall()
+
+    def set_brand_status(self, brand_id: int, status: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE event_brands SET status = ?, reviewed_at = ? WHERE id = ?",
+                (status, time.time(), brand_id),
+            )
+
+    def delete_brands_for_event(self, event_id: str) -> int:
+        with self.connect() as conn:
+            cur = conn.execute("DELETE FROM event_brands WHERE event_id = ?", (event_id,))
+            return cur.rowcount
+
+    def delete_brands_for_events(self, ids: list[str]) -> None:
+        if not ids:
+            return
+        with self.connect() as conn:
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                marks = ",".join("?" * len(chunk))
+                conn.execute(f"DELETE FROM event_brands WHERE event_id IN ({marks})", chunk)
+
+    def delete_all_brands(self) -> None:
+        with self.connect() as conn:
+            conn.execute("DELETE FROM event_brands")
+
+    # ---- per-label controls -------------------------------------------------
+
+    def all_label_settings(self) -> dict[str, dict]:
+        with self.connect() as conn:
+            rows = conn.execute("SELECT * FROM label_settings").fetchall()
+        return {row["label"]: dict(row) for row in rows}
+
+    def label_settings(self, label: str) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM label_settings WHERE label = ?", (label,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def set_label_settings(self, label: str, **fields) -> None:
+        allowed = ("collect_mode", "search", "include_training", "auto_confirm", "pseudo_labels")
+        row = self.label_settings(label) or {"label": label}
+        values = {k: row.get(k) for k in allowed}
+        for key, value in fields.items():
+            if key in allowed:
+                if isinstance(value, bool):
+                    value = int(value)
+                values[key] = value
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO label_settings
+                    (label, collect_mode, search, include_training, auto_confirm, pseudo_labels, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(label) DO UPDATE SET
+                    collect_mode = excluded.collect_mode,
+                    search = excluded.search,
+                    include_training = excluded.include_training,
+                    auto_confirm = excluded.auto_confirm,
+                    pseudo_labels = excluded.pseudo_labels,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    label,
+                    values.get("collect_mode") or "all",
+                    int(values.get("search") or 0),
+                    int(values.get("include_training") if values.get("include_training") is not None else 1),
+                    int(values.get("auto_confirm") if values.get("auto_confirm") is not None else 1),
+                    int(values.get("pseudo_labels") if values.get("pseudo_labels") is not None else 1),
+                    time.time(),
+                ),
+            )
+
+    def bulk_set_label_settings(self, labels: list[str], field: str, value) -> None:
+        for label in labels:
+            self.set_label_settings(label, **{field: value})
+
+    def delete_all_label_settings(self) -> None:
+        with self.connect() as conn:
+            conn.execute("DELETE FROM label_settings")
+
+    # ---- base models --------------------------------------------------------
+
+    def base_model_insert(self, name: str, source: str, fmt: str, path: str | None,
+                          imgsz: int | None = None, labels: str | None = None,
+                          trainable: bool = True, meta: str | None = None) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO base_models (name, source, format, path, imgsz, labels, trainable, meta, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    source = excluded.source, format = excluded.format, path = excluded.path,
+                    imgsz = excluded.imgsz, labels = excluded.labels,
+                    trainable = excluded.trainable, meta = excluded.meta
+                """,
+                (name, source, fmt, path, imgsz, labels, int(bool(trainable)), meta, time.time()),
+            )
+
+    def base_models(self) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return conn.execute("SELECT * FROM base_models ORDER BY source, name").fetchall()
+
+    def base_model_get(self, name: str) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return conn.execute(
+                "SELECT * FROM base_models WHERE name = ?", (name,)
+            ).fetchone()
+
+    def base_model_delete(self, name: str) -> None:
+        with self.connect() as conn:
+            conn.execute("DELETE FROM base_models WHERE name = ?", (name,))
+
+    # ---- reset --------------------------------------------------------------
+
+    def reset_training_data(self) -> None:
+        """Wipe all learned/review data. Keeps base_models only."""
+        with self.connect() as conn:
+            for table in (
+                "event_brands", "corrections", "events", "model_versions",
+                "frigate_backups", "label_settings",
+            ):
+                conn.execute(f"DELETE FROM {table}")
+
+    def pending_total(self) -> int:
+        return self.queue_count("pending") + self.brand_count("pending")
 
     def kv_get(self, key: str) -> str | None:
         with self.connect() as conn:

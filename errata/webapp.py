@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import parse_qsl, quote, urlencode
 
-from fastapi import APIRouter, FastAPI, Form, HTTPException, Request
+from fastapi import APIRouter, FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -23,6 +23,15 @@ from fastapi.responses import (
 from fastapi.templating import Jinja2Templates
 from starlette.background import BackgroundTask
 
+from . import basemodels
+from .controls import (
+    CONTROLS_DEFAULT_DISABLED_KEY,
+    bulk_set_control,
+    effective_controls,
+    effective_for_label,
+    reset_all_disabled,
+    set_control,
+)
 from .db import Database
 from .scheduler import Scheduler
 from .vocab import SYNONYMS_OVERRIDE_KEY, effective_synonyms
@@ -41,7 +50,7 @@ REVIEW_STATUSES = [
     "all",
 ]
 
-FLAG_REASONS = ["mismatch", "low_confidence", "noise", "oversized"]
+FLAG_REASONS = ["mismatch", "candidate", "low_confidence", "noise", "oversized"]
 
 REVIEWED_STATUSES = {"corrected", "false_positive", "confirmed", "ignored", "skipped"}
 
@@ -55,6 +64,9 @@ VIEW_STATUSES = [
     ("all", "All events"),
 ]
 
+BRAND_STATUSES = [("pending", "Pending"), ("confirmed", "Confirmed"),
+                  ("rejected", "Rejected"), ("all", "All")]
+
 BULK_STATUSES = ["skipped", "confirmed", "false_positive", "ignored"]
 BULK_STATUS_ACTIONS = {
     "skipped": "skip",
@@ -62,6 +74,8 @@ BULK_STATUS_ACTIONS = {
     "false_positive": "false_positive",
     "ignored": "ignore",
 }
+
+CONTROL_FIELDS = ["collect_mode", "search", "include_training", "auto_confirm", "pseudo_labels"]
 
 
 def format_ts(ts) -> str:
@@ -97,7 +111,11 @@ def create_app(config: dict) -> FastAPI:
         base = "/" + base
     base = base.rstrip("/")
     labels = list(config["labels"]["track"])
+    attribute_labels = list(config["labels"].get("attributes", []))
     queue_limit = int(config["review"]["queue_limit"])
+    imgsz = int(config["training"].get("imgsz", 320))
+
+    basemodels.seed_builtin_models(db)
 
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
     templates.env.filters["localts"] = format_ts
@@ -110,7 +128,7 @@ def create_app(config: dict) -> FastAPI:
     templates.env.globals["model_choices"] = MODEL_CHOICES
     templates.env.globals["default_model_type"] = str(config["training"].get("model_type", "yolov9s"))
     templates.env.globals["imgsz_choices"] = IMGSZ_CHOICES
-    templates.env.globals["default_imgsz"] = int(config["training"].get("imgsz", 320))
+    templates.env.globals["default_imgsz"] = imgsz
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -130,6 +148,8 @@ def create_app(config: dict) -> FastAPI:
         ctx.update({"request": request, "base": base})
         return templates.TemplateResponse(request, template, ctx, status_code=status_code)
 
+    # ---- review queue -------------------------------------------------------
+
     @router.get("/", response_class=HTMLResponse)
     def dashboard(
         request: Request,
@@ -138,6 +158,9 @@ def create_app(config: dict) -> FastAPI:
         reason: str = "",
         corrected: str = "",
         status: str = "pending",
+        brand: str = "",
+        brand_status: str = "pending",
+        brand_camera: str = "",
         msg: str = "",
     ):
         purged = db.purge_missing_snapshots()
@@ -151,15 +174,24 @@ def create_app(config: dict) -> FastAPI:
             corrected=corrected or None,
             limit=queue_limit,
         )
+        brand_rows = db.brand_queue(
+            status=brand_status or "pending",
+            brand=brand or None,
+            camera=brand_camera or None,
+            limit=queue_limit,
+        )
         ctx = {
             "rows": rows,
+            "brand_rows": brand_rows,
             "labels": labels,
+            "attributes": attribute_labels,
             "cameras": db.distinct_cameras(),
             "event_labels": db.distinct_labels(),
             "corrected_labels": db.corrected_labels(),
             "reasons": FLAG_REASONS,
             "statuses": REVIEW_STATUSES,
             "view_statuses": VIEW_STATUSES,
+            "brand_statuses": BRAND_STATUSES,
             "reviewed_statuses": REVIEWED_STATUSES,
             "bulk_statuses": BULK_STATUSES,
             "filters": {
@@ -168,8 +200,12 @@ def create_app(config: dict) -> FastAPI:
                 "reason": reason,
                 "corrected": corrected,
                 "status": status or "pending",
+                "brand": brand,
+                "brand_status": brand_status or "pending",
+                "brand_camera": brand_camera,
             },
             "pending_count": db.queue_count("pending"),
+            "brand_pending_count": db.brand_count("pending"),
             "total_count": db.queue_count("all"),
             "msg": msg,
         }
@@ -198,6 +234,8 @@ def create_app(config: dict) -> FastAPI:
             version_rows.append(row)
         ctx = {
             "counts": db.counts_by_status(),
+            "brand_counts": db.brands_by_status(),
+            "brands_by_brand": db.brands_by_brand(),
             "corrections_by_camera": db.corrections_by_group("camera"),
             "corrections_by_label": db.corrections_by_group("correct_label"),
             "corrections_total": db.corrections_count(),
@@ -215,13 +253,20 @@ def create_app(config: dict) -> FastAPI:
         }
         return render(request, "summary.html", ctx)
 
+    # ---- synonyms -----------------------------------------------------------
+
     @router.get("/synonyms", response_class=HTMLResponse)
     def synonyms_page(request: Request, msg: str = ""):
-        synonyms = effective_synonyms(config, db)
+        baseline = dict((config.get("analysis", {}) or {}).get("synonyms", {}) or {})
+        merged = effective_synonyms(config, db)
+        additions = {
+            label: [w for w in merged.get(label, []) if w not in baseline.get(label, [])]
+            for label in set(list(baseline.keys()) + list(merged.keys()))
+        }
         ctx = {
-            "synonyms": synonyms,
-            "labels": labels,
-            "extra_labels": [k for k in synonyms if k not in labels],
+            "baseline": baseline,
+            "additions": additions,
+            "labels": list(dict.fromkeys(labels + attribute_labels)),
             "msg": msg,
         }
         return render(request, "synonyms.html", ctx)
@@ -239,7 +284,7 @@ def create_app(config: dict) -> FastAPI:
                 override[label] = words
         db.kv_set(SYNONYMS_OVERRIDE_KEY, json.dumps(override))
         return RedirectResponse(
-            f"{base}/synonyms?msg={quote('Synonyms saved. Applied on the next analyzer run.')}",
+            f"{base}/synonyms?msg={quote('Synonym additions saved. Applied on the next analyzer run.')}",
             status_code=303,
         )
 
@@ -247,12 +292,13 @@ def create_app(config: dict) -> FastAPI:
     def synonyms_reset():
         db.kv_delete(SYNONYMS_OVERRIDE_KEY)
         return RedirectResponse(
-            f"{base}/synonyms?msg={quote('Synonyms reset to the config.yaml baseline.')}",
+            f"{base}/synonyms?msg={quote('Additions cleared; packaged baseline restored.')}",
             status_code=303,
         )
 
+    # ---- object review ------------------------------------------------------
+
     def _parse_box_form(raw: str) -> str | None:
-        """Validate a client-supplied box (JSON [x, y, w, h], frame-relative)."""
         if not raw or not raw.strip():
             return None
         try:
@@ -368,10 +414,7 @@ def create_app(config: dict) -> FastAPI:
             )
             for row in rows:
                 apply_review(row, "confirm", new_label)
-            params["msg"] = (
-                f"Bulk set label '{new_label}' on {len(rows)} event(s) matching "
-                f"the current view filters"
-            )
+            params["msg"] = f"Bulk set label '{new_label}' on {len(rows)} event(s)"
             return RedirectResponse(f"{base}/?{urlencode(params)}", status_code=303)
         action = BULK_STATUS_ACTIONS.get(status)
         if action is None:
@@ -379,18 +422,141 @@ def create_app(config: dict) -> FastAPI:
         rows = db.pending_matching(camera or None, label or None, reason or None)
         for row in rows:
             apply_review(row, action, row["label"] if action == "confirm" else "")
-        scope = ", ".join(
-            filter(
-                None,
-                [
-                    f"camera={camera}" if camera else "",
-                    f"label={label}" if label else "",
-                    f"reason={reason}" if reason else "",
-                ],
-            )
-        ) or "all pending"
-        params["msg"] = f"Bulk set '{status}' on {len(rows)} event(s) matching {scope}"
+        params["msg"] = f"Bulk set '{status}' on {len(rows)} object event(s)"
         return RedirectResponse(f"{base}/?{urlencode(params)}", status_code=303)
+
+    # ---- brand review -------------------------------------------------------
+
+    @router.post("/brand/{brand_id}")
+    def brand_review(
+        brand_id: int,
+        action: str = Form(...),
+        brand: str = Form(""),
+        return_to: str = Form(""),
+    ):
+        if action == "reset":
+            db.set_brand_status(brand_id, "pending")
+            msg = f"Brand item {brand_id} reset to pending"
+        elif action in ("confirm", "confirmed"):
+            db.set_brand_status(brand_id, "confirmed")
+            msg = f"Brand item {brand_id} confirmed"
+        elif action in ("reject", "rejected"):
+            db.set_brand_status(brand_id, "rejected")
+            msg = f"Brand item {brand_id} rejected"
+        else:
+            raise HTTPException(status_code=400, detail=f"unknown action '{action}'")
+        params = dict(parse_qsl(return_to, keep_blank_values=True))
+        params.pop("msg", None)
+        params["msg"] = msg
+        return RedirectResponse(f"{base}/?{urlencode(params)}", status_code=303)
+
+    @router.post("/brands/bulk")
+    def brand_bulk(
+        brand: str = Form(""),
+        camera: str = Form(""),
+        status: str = Form("pending"),
+        action: str = Form(...),
+        return_to: str = Form(""),
+    ):
+        if action not in ("confirm", "rejected", "reset"):
+            raise HTTPException(status_code=400, detail="bad brand bulk action")
+        target = {"confirm": "confirmed", "rejected": "rejected", "reset": "pending"}[action]
+        rows = db.brand_queue(status=status or "pending", brand=brand or None,
+                              camera=camera or None, limit=5000)
+        for row in rows:
+            db.set_brand_status(row["id"], target)
+        params = dict(parse_qsl(return_to, keep_blank_values=True))
+        params.pop("msg", None)
+        params["msg"] = f"Bulk {action} on {len(rows)} brand item(s)"
+        return RedirectResponse(f"{base}/?{urlencode(params)}", status_code=303)
+
+    # ---- per-label controls -------------------------------------------------
+
+    @router.get("/controls", response_class=HTMLResponse)
+    def controls_page(request: Request, msg: str = ""):
+        all_labels = list(dict.fromkeys(labels + attribute_labels))
+        controls = effective_controls(config, db, all_labels)
+        ctx = {
+            "controls": controls,
+            "labels": labels,
+            "attributes": attribute_labels,
+            "default_disabled": bool(db.kv_get(CONTROLS_DEFAULT_DISABLED_KEY) == "1"),
+            "msg": msg,
+        }
+        return render(request, "controls.html", ctx)
+
+    @router.post("/controls")
+    async def controls_save(request: Request):
+        form = await request.form()
+        all_labels = list(dict.fromkeys(labels + attribute_labels))
+        for label in all_labels:
+            if f"present_{label}" not in form:
+                continue
+            mode = str(form.get(f"collect_mode_{label}", "all"))
+            set_control(
+                config, db, label,
+                collect_mode=mode,
+                search=form.get(f"search_{label}") is not None,
+                include_training=form.get(f"include_training_{label}") is not None,
+                auto_confirm=form.get(f"auto_confirm_{label}") is not None,
+                pseudo_labels=form.get(f"pseudo_labels_{label}") is not None,
+            )
+        return RedirectResponse(
+            f"{base}/controls?msg={quote('Label controls saved.')}", status_code=303
+        )
+
+    @router.post("/controls/bulk")
+    def controls_bulk(
+        field: str = Form(...),
+        value: str = Form(...),
+    ):
+        if field not in CONTROL_FIELDS:
+            raise HTTPException(status_code=400, detail="unknown control field")
+        all_labels = list(dict.fromkeys(labels + attribute_labels))
+        parsed = value
+        if field != "collect_mode":
+            parsed = value in ("1", "true", "on", "yes")
+        bulk_set_control(config, db, all_labels, field, parsed)
+        return RedirectResponse(
+            f"{base}/controls?msg={quote(f'Applied {field}={value} to all labels.')}",
+            status_code=303,
+        )
+
+    # ---- base models --------------------------------------------------------
+
+    @router.get("/base-models", response_class=HTMLResponse)
+    def base_models_page(request: Request, msg: str = ""):
+        ctx = {
+            "models": basemodels.list_base_models(db),
+            "msg": msg,
+        }
+        return render(request, "base_models.html", ctx)
+
+    @router.post("/base-models/import-plus")
+    def base_models_import_plus(
+        key: str = Form(...),
+        model_id: str = Form(...),
+    ):
+        result = basemodels.import_frigate_plus(config, db, key.strip(), model_id.strip())
+        msg = f"Imported {result.get('name')}" if result.get("ok") else f"Import failed: {result.get('error')}"
+        return RedirectResponse(f"{base}/base-models?msg={quote(msg)}", status_code=303)
+
+    @router.post("/base-models/upload")
+    async def base_models_upload(file: UploadFile, name: str = Form("")):
+        data = await file.read()
+        if len(data) > 500 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="file too large (max 500 MB)")
+        result = basemodels.store_upload(config, db, file.filename or "model", data, name or None)
+        msg = f"Uploaded {result.get('name')}" if result.get("ok") else f"Upload failed: {result.get('error')}"
+        return RedirectResponse(f"{base}/base-models?msg={quote(msg)}", status_code=303)
+
+    @router.post("/base-models/{name}/delete")
+    def base_models_delete(name: str):
+        result = basemodels.delete_base_model(db, name)
+        msg = f"Deleted {name}" if result.get("ok") else f"Delete failed: {result.get('error')}"
+        return RedirectResponse(f"{base}/base-models?msg={quote(msg)}", status_code=303)
+
+    # ---- snapshots / crop preview ------------------------------------------
 
     def _annotate(path: str, box: str, label: str) -> bytes | None:
         try:
@@ -420,6 +586,18 @@ def create_app(config: dict) -> FastAPI:
             logger.exception("failed to annotate snapshot %s", path)
             return None
 
+    def _effective_box(row) -> tuple[str, str]:
+        box = row["box"] if row else ""
+        label = row["label"] if row else ""
+        corr = db.latest_correction(row["id"]) if row else None
+        if corr:
+            if corr["correct_label"] == "false_positive":
+                box = ""
+            elif corr["box"]:
+                box = corr["box"]
+                label = corr["correct_label"] or label
+        return box, label
+
     def _snapshot_or_404(event_id: str) -> str:
         row = db.get_event(event_id)
         if row is None:
@@ -434,17 +612,7 @@ def create_app(config: dict) -> FastAPI:
         path = _snapshot_or_404(event_id)
         row = db.get_event(event_id)
         no_cache = {"Cache-Control": "no-cache, no-store, must-revalidate"}
-        # Prefer the box from the latest correction so an edited box is what the
-        # card shows; false-positive corrections have no box to draw.
-        box = row["box"] if row else ""
-        label = row["label"] if row else ""
-        corr = db.latest_correction(event_id)
-        if corr:
-            if corr["correct_label"] == "false_positive":
-                box = ""
-            elif corr["box"]:
-                box = corr["box"]
-                label = corr["correct_label"] or label
+        box, label = _effective_box(row)
         if box:
             annotated = _annotate(path, box, label or "")
             if annotated is not None:
@@ -453,20 +621,59 @@ def create_app(config: dict) -> FastAPI:
 
     @router.get("/api/snapshots/{event_id}/clean.jpg")
     def snapshot_clean(event_id: str):
-        """Snapshot without the burned-in detection box, for the box editor."""
         path = _snapshot_or_404(event_id)
         no_cache = {"Cache-Control": "no-cache, no-store, must-revalidate"}
         return FileResponse(path, media_type="image/jpeg", headers=no_cache)
 
+    @router.get("/api/snapshots/{event_id}/crop.jpg")
+    def snapshot_crop(event_id: str):
+        """The actual training crop for this event, with the box drawn on it."""
+        from .imaging import region_crop_pil
+
+        path = _snapshot_or_404(event_id)
+        row = db.get_event(event_id)
+        box, label = _effective_box(row)
+        no_cache = {"Cache-Control": "no-cache, no-store, must-revalidate"}
+        try:
+            from PIL import Image, ImageDraw
+
+            img = Image.open(path).convert("RGB")
+            parsed = None
+            if box:
+                try:
+                    parsed = tuple(float(v) for v in json.loads(box))
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    parsed = None
+            crop, box_c = region_crop_pil(img, parsed, imgsz)
+            if box_c:
+                w_px, h_px = crop.size
+                x, y, w, h = box_c
+                draw = ImageDraw.Draw(crop)
+                draw.rectangle(
+                    [int(x * w_px), int(y * h_px), int((x + w) * w_px), int((y + h) * h_px)],
+                    outline=(0, 220, 255), width=2,
+                )
+                if label:
+                    draw.rectangle([2, 2, 8 * len(label) + 8, 15], fill=(0, 0, 0))
+                    draw.text((4, 3), label, fill=(0, 220, 255))
+            buf = io.BytesIO()
+            crop.save(buf, format="JPEG", quality=85)
+            return Response(content=buf.getvalue(), media_type="image/jpeg", headers=no_cache)
+        except Exception:
+            logger.exception("failed to build crop preview for %s", event_id)
+            return FileResponse(path, media_type="image/jpeg", headers=no_cache)
+
     @router.get("/api/queue.json")
     def queue_json(status: str = "pending"):
         rows = db.queue(status=status, limit=queue_limit)
+        brands = db.brand_queue(status=status if status != "new" else "pending", limit=queue_limit)
         return JSONResponse(
             {
                 "generated_at": time.time(),
                 "status": status,
                 "count": len(rows),
                 "events": [dict(r) for r in rows],
+                "brands": [dict(r) for r in brands],
             }
         )
 
@@ -479,8 +686,11 @@ def create_app(config: dict) -> FastAPI:
             "last_scheduler_run": scheduler.last_run,
             "last_scheduler_stats": scheduler.last_stats,
             "pending": db.queue_count("pending"),
+            "brands_pending": db.brand_count("pending"),
             "corrections": db.corrections_count(),
         }
+
+    # ---- training -----------------------------------------------------------
 
     train_state = {
         "running": False,
@@ -502,18 +712,10 @@ def create_app(config: dict) -> FastAPI:
         chosen_imgsz = int(imgsz or config["training"]["imgsz"])
         train_state.update(
             {
-                "running": True,
-                "started_at": time.time(),
-                "finished_at": None,
-                "ok": None,
-                "detail": "training",
-                "phase": "starting",
-                "model_type": chosen,
-                "imgsz": chosen_imgsz,
-                "epoch": None,
-                "epochs": None,
-                "progress": None,
-                "metrics": None,
+                "running": True, "started_at": time.time(), "finished_at": None,
+                "ok": None, "detail": "training", "phase": "starting",
+                "model_type": chosen, "imgsz": chosen_imgsz,
+                "epoch": None, "epochs": None, "progress": None, "metrics": None,
             }
         )
         try:
@@ -524,44 +726,35 @@ def create_app(config: dict) -> FastAPI:
             exported = export_dataset(config, db, imgsz=imgsz)
             train_state["detail"] = "training"
             result = run_training(
-                config,
-                db,
-                device=None,
-                on_progress=train_state.update,
-                model_type=model_type,
-                imgsz=imgsz,
+                config, db, device=None, on_progress=train_state.update,
+                model_type=model_type, imgsz=imgsz,
             )
             result["exported"] = exported
             db.kv_set("last_train_at", str(time.time()))
             train_state.update(
                 {
-                    "running": False,
-                    "finished_at": time.time(),
-                    "ok": True,
-                    "detail": json.dumps(result),
-                    "phase": "done",
-                    "progress": 1.0,
+                    "running": False, "finished_at": time.time(), "ok": True,
+                    "detail": json.dumps(result), "phase": "done", "progress": 1.0,
                 }
             )
         except Exception as exc:
             logger.exception("training job failed")
             train_state.update(
                 {
-                    "running": False,
-                    "finished_at": time.time(),
-                    "ok": False,
-                    "detail": str(exc),
-                    "phase": "failed",
+                    "running": False, "finished_at": time.time(), "ok": False,
+                    "detail": str(exc), "phase": "failed",
                 }
             )
 
     @router.post("/api/train")
     def start_train(model_type: str = "", imgsz: int = 0):
-        from .trainer import ALL_MODELS, IMGSZ_CHOICES
+        from .trainer import ALL_MODELS, IMGSZ_CHOICES, trained_class_map
 
         model_type = model_type.strip()
         if model_type and model_type not in ALL_MODELS:
-            return JSONResponse({"ok": False, "detail": f"unknown model '{model_type}'"}, status_code=400)
+            base = db.base_model_get(model_type)
+            if base is None:
+                return JSONResponse({"ok": False, "detail": f"unknown model '{model_type}'"}, status_code=400)
         if imgsz and imgsz not in IMGSZ_CHOICES:
             return JSONResponse(
                 {"ok": False, "detail": f"unsupported imgsz '{imgsz}'; choose {IMGSZ_CHOICES}"},
@@ -574,6 +767,11 @@ def create_app(config: dict) -> FastAPI:
             )
         if train_state["running"]:
             return JSONResponse({"ok": False, "detail": "a training run is already in progress"}, status_code=409)
+        if not trained_class_map(config, db):
+            return JSONResponse(
+                {"ok": False, "detail": "no labels have include_training enabled; enable one on the Controls page"},
+                status_code=400,
+            )
         if importlib.util.find_spec("ultralytics") is None:
             return JSONResponse(
                 {"ok": False, "detail": "ultralytics is not installed in this image; use the Mac kit or deploy/train.sh"},
@@ -679,6 +877,36 @@ def create_app(config: dict) -> FastAPI:
     def run_now():
         scheduler.run_now()
         return JSONResponse({"ok": True, "detail": "scheduler run triggered"}, status_code=202)
+
+    # ---- reset --------------------------------------------------------------
+
+    @router.post("/api/reset")
+    async def api_reset(request: Request):
+        if train_state["running"]:
+            return JSONResponse(
+                {"ok": False, "error": "a training run is in progress; try again when it finishes"},
+                status_code=409,
+            )
+        body = {}
+        if request.headers.get("content-type", "").startswith("application/json"):
+            body = await request.json()
+        else:
+            form = await request.form()
+            body = dict(form)
+        confirm = str(body.get("confirm", "")).strip()
+        if confirm != "RESET":
+            return JSONResponse({"ok": False, "error": "type RESET to confirm"}, status_code=400)
+
+        from .trainer import reset_training_data_files, activate_model
+
+        with deploy_lock:
+            reset_training_data_files(config, db)
+
+            return_model = str(body.get("return_model", "")).strip()
+            result = {"ok": True, "wiped": True}
+            if return_model:
+                result["activate"] = activate_model(config, db, return_model)
+        return JSONResponse(result)
 
     app.include_router(router)
     return app

@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Errata — Base models{% endblock %}
+{% block content %}
+{% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+<div class="msg hint">
+  Base models are starting checkpoints for training and deploy targets. They are
+  stored separately from published models and never count against the model
+  retention limit. YOLO variants (and uploaded <code>.pt</code>) are trainable;
+  imported Frigate+ models and uploaded <code>.onnx</code> are deploy-only.
+</div>
+
+<div class="section-title">Import a Frigate+ model</div>
+<form method="post" action="{{ base }}/base-models/import-plus" class="actions">
+  <input type="text" name="key" placeholder="Frigate+ API key (<uuid>:<secret>)" style="min-width: 28rem;" autocomplete="off">
+  <input type="text" name="model_id" placeholder="model number" style="width: 10rem;">
+  <button class="primary" type="submit">Fetch and store</button>
+</form>
+<div class="meta">The key is used once to download the model and is never stored.</div>
+
+<div class="section-title">Upload a model</div>
+<form method="post" action="{{ base }}/base-models/upload" enctype="multipart/form-data" class="actions">
+  <input type="file" name="file" accept=".pt,.onnx">
+  <input type="text" name="name" placeholder="name (optional)" style="width: 12rem;">
+  <button class="primary" type="submit">Upload</button>
+</form>
+
+<div class="section-title">Registered base models</div>
+<table>
+  <tr><th>Name</th><th>Source</th><th>Format</th><th>Trainable</th><th>imgsz</th><th>Path</th><th></th></tr>
+  {% for m in models %}
+  <tr>
+    <td>{{ m.name }}</td>
+    <td>{{ m.source }}</td>
+    <td>{{ m.format }}</td>
+    <td>{{ 'yes' if m.trainable else 'no' }}</td>
+    <td>{{ m.imgsz or '—' }}</td>
+    <td class="meta">{{ m.path or '(downloaded on demand)' }}</td>
+    <td>
+      {% if m.source in ('frigate_plus', 'upload') %}
+      <form method="post" action="{{ base }}/base-models/{{ m.name }}/delete" onsubmit="return confirm('Delete base model {{ m.name }}?')">
+        <button class="warn" type="submit">Delete</button>
+      </form>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% endblock %}

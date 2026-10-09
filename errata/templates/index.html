@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-{% set return_to = 'camera=' ~ (filters.camera | urlencode) ~ '&label=' ~ (filters.label | urlencode) ~ '&reason=' ~ (filters.reason | urlencode) ~ '&corrected=' ~ (filters.corrected | urlencode) ~ '&status=' ~ (filters.status | urlencode) %}
+{% set return_to = 'camera=' ~ (filters.camera | urlencode) ~ '&label=' ~ (filters.label | urlencode) ~ '&reason=' ~ (filters.reason | urlencode) ~ '&corrected=' ~ (filters.corrected | urlencode) ~ '&status=' ~ (filters.status | urlencode) ~ '&brand=' ~ (filters.brand | urlencode) ~ '&brand_status=' ~ (filters.brand_status | urlencode) ~ '&brand_camera=' ~ (filters.brand_camera | urlencode) %}
 <div class="filters">
   <form method="get" action="{{ base }}/">
     <label>View
@@ -47,22 +47,9 @@
     </label>
     <button class="primary" type="submit">Apply to matching</button>
   </form>
-  <form method="post" action="{{ base }}/bulk" onsubmit="return confirm('Set this label on EVERY event in the current View matching the filters? This replaces any existing correction on those events.');">
-    <input type="hidden" name="mode" value="label">
-    <input type="hidden" name="camera" value="{{ filters.camera }}">
-    <input type="hidden" name="label" value="{{ filters.label }}">
-    <input type="hidden" name="reason" value="{{ filters.reason }}">
-    <input type="hidden" name="corrected" value="{{ filters.corrected }}">
-    <input type="hidden" name="status" value="{{ filters.status }}">
-    <input type="hidden" name="return_to" value="{{ return_to }}">
-    <label>Set label
-      <select name="new_label">
-        {% for l in labels %}<option value="{{ l }}">{{ l }}</option>{% endfor %}
-      </select>
-    </label>
-    <button class="warn" type="submit">Apply label to matching</button>
-  </form>
 </div>
+
+<div class="section-head">Objects ({{ pending_count }} pending)</div>
 {% if rows %}
 <div class="grid">
 {% for row in rows %}
@@ -71,7 +58,9 @@
 {% set is_reviewed = row.status in reviewed_statuses %}
 {% set default_label = corrected or suggested or row.label %}
   <div class="card">
-    <img src="{{ base }}/api/snapshots/{{ row.id }}.jpg?v=2" alt="snapshot" loading="lazy" class="zoom" onclick="openLightbox(this.src)">
+    <img src="{{ base }}/api/snapshots/{{ row.id }}/crop.jpg" alt="training crop" loading="lazy"
+         class="zoom crop-thumb" title="This is the training crop — click for full frame"
+         onclick="openLightbox('{{ base }}/api/snapshots/{{ row.id }}.jpg')">
     <div class="body">
       <div class="meta">
         <span class="badge camera">{{ row.camera }}</span>
@@ -80,9 +69,9 @@
         {% if is_reviewed %}<span class="badge status">{{ row.status }}</span>{% endif %}
         {% if row.flag_reason %}<span class="badge {{ row.flag_reason }}">{{ row.flag_reason }}</span>{% endif %}
         {% if suggested and suggested != row.label %}<span class="badge suggest">suggests: {{ row.suggested_label | replace(',', ', ') }}</span>{% endif %}
+        {% if row.sub_label %}<span class="badge">{{ row.sub_label }}</span>{% endif %}
         <span>{{ '%.0f%%'|format((row.confidence or 0) * 100) }}</span>
         <span>{{ row.start_time | localts }}</span>
-        {% if is_reviewed and row.reviewed_at %}<span>reviewed {{ row.reviewed_at | localts }}</span>{% endif %}
       </div>
       {% if row.description %}<p class="desc">{{ row.description }}</p>{% endif %}
       <div class="quick">
@@ -120,7 +109,7 @@
         <button class="primary" name="action" value="confirm">Change</button>
         <button class="warn" name="action" value="false_positive">False positive</button>
         {% if is_reviewed %}
-        <button name="action" value="reset" formnovalidate title="Undo this review and return the event to the queue">Undo review</button>
+        <button name="action" value="reset" formnovalidate>Undo review</button>
         {% else %}
         <button name="action" value="skip">Skip</button>
         {% endif %}
@@ -130,11 +119,69 @@
 {% endfor %}
 </div>
 {% else %}
-<div class="empty">Nothing here — no events match this view.</div>
+<div class="empty">No object events match this view.</div>
 {% endif %}
+
+<div class="section-head">Brands ({{ brand_pending_count }} pending)</div>
+<div class="filters">
+  <form method="get" action="{{ base }}/">
+    <input type="hidden" name="status" value="{{ filters.status }}">
+    <input type="hidden" name="camera" value="{{ filters.camera }}">
+    <label>Brand
+      <select name="brand" onchange="this.form.submit()">
+        <option value="">All</option>
+        {% for a in attributes %}<option value="{{ a }}" {% if a == filters.brand %}selected{% endif %}>{{ a }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Status
+      <select name="brand_status" onchange="this.form.submit()">
+        {% for value, text in brand_statuses %}<option value="{{ value }}" {% if value == filters.brand_status %}selected{% endif %}>{{ text }}</option>{% endfor %}
+      </select>
+    </label>
+  </form>
+  <form method="post" action="{{ base }}/brands/bulk" onsubmit="return confirm('Apply to all brand items matching the filters?');">
+    <input type="hidden" name="brand" value="{{ filters.brand }}">
+    <input type="hidden" name="camera" value="{{ filters.brand_camera }}">
+    <input type="hidden" name="status" value="{{ filters.brand_status }}">
+    <input type="hidden" name="return_to" value="{{ return_to }}">
+    <button class="primary" name="action" value="confirm">Confirm all</button>
+    <button class="warn" name="action" value="rejected">Reject all</button>
+  </form>
+</div>
+{% if brand_rows %}
+<div class="grid">
+{% for b in brand_rows %}
+  <div class="card">
+    <img src="{{ base }}/api/snapshots/{{ b.event_id }}/crop.jpg" alt="brand crop" loading="lazy" class="zoom"
+         onclick="openLightbox('{{ base }}/api/snapshots/{{ b.event_id }}.jpg')">
+    <div class="body">
+      <div class="meta">
+        <span class="badge camera">{{ b.camera }}</span>
+        <span class="badge brand">{{ b.brand }}</span>
+        <span class="badge label">on {{ b.object_label }}</span>
+        <span class="badge status">{{ b.status }}</span>
+        {% if b.score %}<span>{{ '%.0f%%'|format(b.score * 100) }}</span>{% endif %}
+        <span>{{ b.start_time | localts }}</span>
+      </div>
+      {% if b.description %}<p class="desc">{{ b.description }}</p>{% endif %}
+      <form class="actions" method="post" action="{{ base }}/brand/{{ b.id }}">
+        <input type="hidden" name="return_to" value="{{ return_to }}">
+        <button class="chip confirm" name="action" value="confirm">Confirm brand</button>
+        <button class="chip reject" name="action" value="rejected">Reject</button>
+        <button name="action" value="reset" formnovalidate>Undo</button>
+      </form>
+    </div>
+  </div>
+{% endfor %}
+</div>
+{% else %}
+<div class="empty">No brand items match this view.</div>
+{% endif %}
+
 {% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
 <div class="stat-grid">
-  <div class="stat"><div class="n">{{ pending_count }}</div><div class="t">Pending review</div></div>
+  <div class="stat"><div class="n">{{ pending_count }}</div><div class="t">Objects pending</div></div>
+  <div class="stat"><div class="n">{{ brand_pending_count }}</div><div class="t">Brands pending</div></div>
   <div class="stat"><div class="n">{{ total_count }}</div><div class="t">Events tracked</div></div>
 </div>
 {% endblock %}

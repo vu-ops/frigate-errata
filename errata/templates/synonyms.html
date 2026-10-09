@@ -3,39 +3,29 @@
 {% block content %}
 {% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
 <div class="msg hint">
-  Synonyms are extra words that count as a label match when comparing the YOLO
-  label against the GenAI description. They drive mismatch detection, the
-  auto-confirm rule, and label suggestions. Plurals ("cats", "foxes") and
-  possessives ("cat's") are handled automatically — list only singular forms.
-  Multi-word entries are allowed ("golf cart"). Changes are saved as a
-  database override and applied on the next analyzer run; config.yaml remains
-  the shareable baseline.
+  Synonyms are extra words that count as a label match when comparing a YOLO
+  label against the GenAI description. They also drive candidate <em>search</em>
+  and label suggestions. Plurals ("cats", "foxes") and possessives ("cat's") are
+  handled automatically — list only singular forms. Your entries are
+  <strong>appended</strong> to the packaged baseline; built-in synonyms cannot be
+  removed here.
 </div>
 <form method="post" action="{{ base }}/synonyms">
 <table>
+  <tr><th>Label</th><th>Your additions</th><th>Packaged baseline</th></tr>
   {% for l in labels %}
   <tr>
     <td class="k"><span class="badge label">{{ l }}</span></td>
-    <td><input type="text" name="sym_{{ l }}" value="{{ synonyms.get(l, []) | join(', ') }}" placeholder="no synonyms" autocomplete="off"></td>
+    <td><input type="text" name="sym_{{ l }}" value="{{ additions.get(l, []) | join(', ') }}" placeholder="no additions" autocomplete="off"></td>
+    <td class="meta">{{ baseline.get(l, []) | join(', ') or '—' }}</td>
   </tr>
   {% endfor %}
 </table>
 <div class="actions" style="margin-bottom: 1.5rem;">
-  <button class="primary" type="submit">Save synonyms</button>
+  <button class="primary" type="submit">Save additions</button>
 </div>
 </form>
-{% if extra_labels %}
-<div class="section-title">Labels not in the track list</div>
-<table>
-  {% for l in extra_labels %}
-  <tr>
-    <td class="k"><span class="badge label">{{ l }}</span></td>
-    <td>{{ synonyms[l] | join(', ') }}</td>
-  </tr>
-  {% endfor %}
-</table>
-{% endif %}
-<form method="post" action="{{ base }}/synonyms/reset" onsubmit="return confirm('Discard all UI edits and reset to the config.yaml baseline?')">
-  <button class="warn" type="submit">Reset to config.yaml baseline</button>
+<form method="post" action="{{ base }}/synonyms/reset" onsubmit="return confirm('Clear your additions and keep the packaged baseline?')">
+  <button class="warn" type="submit">Reset to baseline</button>
 </form>
 {% endblock %}

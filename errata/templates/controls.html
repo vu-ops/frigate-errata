@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Errata — Controls{% endblock %}
+{% block content %}
+{% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+<div class="msg hint">
+  Per-label controls. <strong>Collect</strong>: <code>all</code> keeps everything,
+  <code>review only</code> keeps only events needing a human decision,
+  <code>off</code> collects nothing. <strong>Search</strong> scans GenAI descriptions
+  of new events for this label's synonyms (across all detector labels) and surfaces
+  matches for review — use it to grow a new label. <strong>Train</strong> decides
+  whether a label is exported; off means collect-only. <strong>Auto-confirm</strong>
+  lets the analyzer confirm this label without a human. <strong>Pseudo</strong>
+  allows coherent auto-confirmed events to be reused as training labels.
+  {% if default_disabled %}<br><strong>Fresh-start mode is on</strong>: labels you add later default to disabled.{% endif %}
+</div>
+<form method="post" action="{{ base }}/controls">
+<table>
+  <tr>
+    <th>Label</th><th>Collect</th><th>Search</th><th>Train</th><th>Auto-confirm</th><th>Pseudo</th>
+  </tr>
+  {% for label, c in controls.items() %}
+  <tr>
+    <td class="k">
+      <input type="hidden" name="present_{{ label }}" value="1">
+      <span class="badge {{ 'brand' if label in attributes else 'label' }}">{{ label }}</span>
+      {% if label in attributes %}<span class="meta">brand</span>{% endif %}
+    </td>
+    <td>
+      <select name="collect_mode_{{ label }}">
+        {% for m in ['all', 'review_only', 'off'] %}
+        <option value="{{ m }}" {% if c.collect_mode == m %}selected{% endif %}>{{ m }}</option>
+        {% endfor %}
+      </select>
+    </td>
+    <td><input type="checkbox" name="search_{{ label }}" {% if c.search %}checked{% endif %}></td>
+    <td><input type="checkbox" name="include_training_{{ label }}" {% if c.include_training %}checked{% endif %}></td>
+    <td><input type="checkbox" name="auto_confirm_{{ label }}" {% if c.auto_confirm %}checked{% endif %}></td>
+    <td><input type="checkbox" name="pseudo_labels_{{ label }}" {% if c.pseudo_labels %}checked{% endif %}></td>
+  </tr>
+  {% endfor %}
+</table>
+<div class="actions" style="margin-bottom: 1.5rem;">
+  <button class="primary" type="submit">Save controls</button>
+</div>
+</form>
+
+<div class="section-title">Bulk apply to all labels</div>
+<form method="post" action="{{ base }}/controls/bulk" class="actions">
+  <label>Collect
+    <select name="value">
+      <option value="all">all</option>
+      <option value="review_only">review_only</option>
+      <option value="off">off</option>
+    </select>
+  </label>
+  <input type="hidden" name="field" value="collect_mode">
+  <button type="submit">Apply collect mode</button>
+</form>
+<div class="actions" style="margin-bottom: 1.5rem; flex-wrap: wrap;">
+  {% for field, on, off in [('search','on','off'), ('include_training','on','off'), ('auto_confirm','on','off'), ('pseudo_labels','on','off')] %}
+  <form method="post" action="{{ base }}/controls/bulk">
+    <input type="hidden" name="field" value="{{ field }}">
+    <input type="hidden" name="value" value="1">
+    <button type="submit">{{ field }}: on</button>
+  </form>
+  <form method="post" action="{{ base }}/controls/bulk">
+    <input type="hidden" name="field" value="{{ field }}">
+    <input type="hidden" name="value" value="0">
+    <button type="submit">{{ field }}: off</button>
+  </form>
+  {% endfor %}
+</div>
+{% endblock %}

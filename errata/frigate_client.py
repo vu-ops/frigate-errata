@@ -82,7 +82,8 @@ class FrigateClient:
         resp.raise_for_status()
         return resp.text.strip().strip('"')
 
-    def events(self, since: float | None, limit: int = 500, before: float | None = None) -> list[dict]:
+    def events(self, since: float | None, limit: int = 500, before: float | None = None,
+               labels: list[str] | None = None) -> list[dict]:
         params: dict = {
             "limit": limit,
             "has_snapshot": "1",
@@ -93,6 +94,8 @@ class FrigateClient:
             params["after"] = since
         if before:
             params["before"] = before
+        if labels:
+            params["labels"] = ",".join(labels)
         resp = self.request("GET", "/api/events", params=params)
         if resp.status_code != 200:
             raise FrigateError(f"GET /api/events returned {resp.status_code}: {resp.text[:200]}")

@@ -12,9 +12,11 @@ from collections import Counter
 from pathlib import Path
 
 from .config import load_config, setup_logging
+from .controls import effective_controls
 from .db import Database
 from .frigate_client import FrigateClient
 from .geometry import is_oversized_box, is_plausible_box
+from .imaging import region_crop_cv2 as _region_crop
 from .vocab import effective_synonyms, label_in_text
 
 logger = logging.getLogger(__name__)
@@ -43,6 +45,7 @@ def _select_pseudo_labels(cfg: dict, db: Database, class_map: dict) -> list:
     oversized_enabled = bool(oversized_cfg.get("enabled", True))
     oversized_max_area = float(oversized_cfg.get("max_area", 0.4))
     synonyms = effective_synonyms(cfg, db)
+    controls = effective_controls(cfg, db, class_map.keys())
     with db.connect() as conn:
         rows = conn.execute(
             "SELECT * FROM events WHERE status = 'confirmed' AND snapshot_path != '' ORDER BY start_time ASC"
@@ -55,6 +58,8 @@ def _select_pseudo_labels(cfg: dict, db: Database, class_map: dict) -> list:
             continue
         label = row["label"]
         if label not in class_map:
+            continue
+        if not (controls.get(label, {}) or {}).get("pseudo_labels", True):
             continue
         if not is_plausible_box(row["box"]):
             continue
@@ -75,74 +80,64 @@ def _select_pseudo_labels(cfg: dict, db: Database, class_map: dict) -> list:
     return picked
 
 
-def _region_crop(img, box, imgsz: int, min_side: int = 160):
-    """Crop a square region the way Frigate feeds the detector at inference:
-    ~1.35x the object's larger side, with black padding when the region extends
-    past the frame (Frigate builds oversized regions for full-width detections).
-    Training on the same domain as inference keeps the model from hallucinating
-    on the content/padding boundary or on zoomed crops."""
-    import cv2
-    import numpy as np
 
-    fh, fw = img.shape[:2]
-    if box is None:
-        side = random.choice([s for s in (320, 480, 640) if s <= min(fw, fh)] or [min(fw, fh)])
-        side = max(side // 4 * 4, 4)
-        x0 = random.randint(0, max(0, fw - side))
-        y0 = random.randint(0, max(0, fh - side))
-        crop = img[y0:y0 + side, x0:x0 + side]
-        return cv2.resize(crop, (imgsz, imgsz), interpolation=cv2.INTER_LINEAR), None
+def trained_class_map(cfg: dict, db: Database) -> dict:
+    """Label -> class index for the classes actually being trained.
 
-    px, py, pw, ph = box[0] * fw, box[1] * fh, box[2] * fw, box[3] * fh
-    side = int(1.35 * max(pw, ph))
-    side = max(side, min_side, 4)
-    side = min(side, 2 * max(fw, fh))
-    cx, cy = px + pw / 2.0, py + ph / 2.0
-    x0 = int(round(cx - side / 2.0))
-    y0 = int(round(cy - side / 2.0))
-    canvas = np.zeros((side, side, 3), np.uint8)
-    sx0, sy0 = max(0, x0), max(0, y0)
-    dx0, dy0 = sx0 - x0, sy0 - y0
-    cw = min(fw - sx0, side - dx0)
-    ch = min(fh - sy0, side - dy0)
-    if cw > 0 and ch > 0:
-        canvas[dy0:dy0 + ch, dx0:dx0 + cw] = img[sy0:sy0 + ch, sx0:sx0 + cw]
-    crop = cv2.resize(canvas, (imgsz, imgsz), interpolation=cv2.INTER_LINEAR)
-    bx = min(max((px - x0) / side, 0.0), 1.0)
-    by = min(max((py - y0) / side, 0.0), 1.0)
-    bw = min(max(pw / side, 0.0), 1.0)
-    bh = min(max(ph / side, 0.0), 1.0)
-    return crop, (bx, by, bw, bh)
+    Object classes (labels.track) whose per-label include_training control is
+    on. Brands/attributes and license_plate are never classes.
+    """
+    track = list(cfg["labels"]["track"])
+    controls = effective_controls(cfg, db, track)
+    trained = [l for l in track if (controls.get(l, {}) or {}).get("include_training", True)]
+    return {name: idx for idx, name in enumerate(trained)}
 
 
 def export_dataset(cfg: dict, db: Database, imgsz: int | None = None) -> dict:
-    labels = list(cfg["labels"]["track"])
-    class_map = {name: idx for idx, name in enumerate(labels)}
+    class_map = trained_class_map(cfg, db)
+    trained = list(class_map.keys())
+    attribute_set = set(cfg["labels"].get("attributes") or []) | {"license_plate"}
     dataset_dir = Path(cfg["training"]["dataset_dir"])
     val_split = float(cfg["training"]["val_split"])
     region_crops = bool(cfg["training"].get("region_crops", True))
     imgsz = int(imgsz or cfg["training"]["imgsz"])
 
+    if not class_map:
+        logger.warning(
+            "no labels have include_training enabled; nothing to export. "
+            "Enable at least one label on the Controls page."
+        )
+        return {"exported": 0, "train": 0, "val": 0, "background": 0, "pseudo": 0}
+
     all_rows = db.corrections_unexported()
     positives = []
     backgrounds = []
-    skipped_ids = []
+    dropped_ids = []
+    held_ids = []
     for row in all_rows:
-        if row["correct_label"] == "false_positive":
+        label = row["correct_label"]
+        if label == "false_positive":
             if row["image_path"] and Path(row["image_path"]).is_file():
                 backgrounds.append(row)
             else:
-                skipped_ids.append(row["id"])
+                dropped_ids.append(row["id"])
         elif (
-            row["correct_label"] in class_map
+            label in class_map
             and row["image_path"]
             and Path(row["image_path"]).is_file()
             and row["box"]
         ):
             positives.append(row)
+        elif label in attribute_set:
+            # Attribute/enrichment labels are never detector classes: drop.
+            dropped_ids.append(row["id"])
         else:
-            skipped_ids.append(row["id"])
+            # Candidate/unenabled label: hold (keep unexported until enabled).
+            held_ids.append(row["id"])
     rows = positives + backgrounds
+    if held_ids:
+        logger.info("holding %d correction(s) for labels not currently trained", len(held_ids))
+
 
     counts = {"exported": 0, "train": 0, "val": 0, "background": 0, "pseudo": 0}
     pseudo_rows = _select_pseudo_labels(cfg, db, class_map)
@@ -156,9 +151,9 @@ def export_dataset(cfg: dict, db: Database, imgsz: int | None = None) -> dict:
                 stale.unlink(missing_ok=True)
 
     if not rows and not pseudo_rows:
-        db.corrections_mark_exported(skipped_ids)
-        if skipped_ids:
-            logger.info("no exportable corrections, marked %d records as processed", len(skipped_ids))
+        db.corrections_mark_exported(dropped_ids)
+        if dropped_ids:
+            logger.info("no exportable corrections, marked %d records as processed", len(dropped_ids))
         else:
             logger.info("no unexported corrections, dataset unchanged")
         return counts
@@ -175,7 +170,7 @@ def export_dataset(cfg: dict, db: Database, imgsz: int | None = None) -> dict:
             ("val", rows[split_index:]),
         ]
 
-    exported_ids: list[int] = list(skipped_ids)
+    exported_ids: list[int] = list(dropped_ids)
 
     for subset_name, subset_rows in subsets:
         images_dir = dataset_dir / "images" / subset_name
@@ -250,7 +245,7 @@ def export_dataset(cfg: dict, db: Database, imgsz: int | None = None) -> dict:
     (dataset_dir / "data.yaml").write_text(
         f"path: {dataset_dir}\ntrain: images/train\nval: images/val\nnames:\n{names_block}\n"
     )
-    (dataset_dir / "labels.txt").write_text("\n".join(labels) + "\n")
+    (dataset_dir / "labels.txt").write_text("\n".join(trained) + "\n")
 
     if pseudo_rows:
         images_dir = dataset_dir / "images" / "train"
@@ -609,7 +604,9 @@ def publish_model(cfg: dict, db: Database, onnx_path: Path, training_count: int,
     dest = publish_dir / f"errata_{stamp}.onnx"
     shutil.copyfile(onnx_path, dest)
 
-    labels = list(cfg["labels"]["track"])
+    labels = list(trained_class_map(cfg, db).keys())
+    if not labels:
+        raise ValueError("refusing to publish a model with zero classes; enable a label first")
     (publish_dir / "labels.txt").write_text("\n".join(labels) + "\n")
     (publish_dir / "metrics.json").write_text(
         json.dumps({"created_at": time.time(), **metrics}, indent=2) + "\n"
@@ -652,14 +649,18 @@ def update_frigate_config(
     return True
 
 
-def resolve_weights_path(use_model: str, training: dict) -> str:
-    """Return a loadable .pt path for a model variant.
+def resolve_weights_path(use_model: str, training: dict, db: Database | None = None) -> str:
+    """Return a loadable .pt path for a base/donor model.
 
-    Ultralytics downloads missing weights into the directory it is given, so we
-    must point it at a writable cache (the image's /app is read-only for the
-    service user). Prefer an existing cache entry, then a baked-in weight, then
-    the cache path as the download target.
+    Prefers a registered base model (registry), then an existing Ultralytics
+    cache entry, then a baked-in weight, then the cache path as the download
+    target. Ultralytics downloads missing weights into the directory it is
+    given, so this must be writable.
     """
+    if db is not None:
+        row = db.base_model_get(use_model)
+        if row is not None and row["path"] and Path(row["path"]).is_file():
+            return str(row["path"])
     cache_root = (
         training.get("weights_dir")
         or os.environ.get("YOLO_CONFIG_DIR")
@@ -687,6 +688,12 @@ def run_training(
 ) -> dict:
     import multiprocessing as mp
 
+    if not trained_class_map(cfg, db):
+        raise ValueError(
+            "no labels have include_training enabled; enable at least one label "
+            "on the Controls page before training"
+        )
+
     try:
         mp.set_start_method("spawn", force=True)
     except RuntimeError:
@@ -710,7 +717,7 @@ def run_training(
             logger.debug("training progress callback failed", exc_info=True)
 
     def _train(device: str):
-        weights = resolve_weights_path(use_model, training)
+        weights = resolve_weights_path(use_model, training, db)
         logger.info("loading base weights %s for %s on %s", weights, use_model, device)
         model = YOLO(weights)
 
@@ -919,6 +926,47 @@ def skip_degenerate_boxes(db: Database) -> None:
     )
 
 
+def reset_training_data_files(cfg: dict, db: Database) -> dict:
+    """Delete all learned/review data and files, keeping base models.
+
+    Used by the Reset / start-over flow. Writes disabled per-label controls,
+    then takes one final Frigate config backup so there is a rollback point.
+    """
+    from .controls import reset_all_disabled
+
+    dataset_dir = Path(cfg["training"]["dataset_dir"])
+    for sub in ("images", "labels"):
+        shutil.rmtree(dataset_dir / sub, ignore_errors=True)
+    for name in ("data.yaml", "labels.txt"):
+        (dataset_dir / name).unlink(missing_ok=True)
+
+    shutil.rmtree(Path(cfg["training"]["model_output_dir"]), ignore_errors=True)
+
+    publish_dir = Path(cfg["training"]["publish_dir"]) / "published"
+    for pattern in ("errata_*.onnx", "labels.txt", "metrics.json"):
+        for path in publish_dir.glob(pattern):
+            path.unlink(missing_ok=True)
+
+    shutil.rmtree(Path(cfg["frigate"]["snapshot_dir"]), ignore_errors=True)
+
+    backup_dir = Path(cfg["frigate"].get("backup_dir", "/data/frigate-config-backups"))
+    for path in backup_dir.glob("config-*.yml"):
+        path.unlink(missing_ok=True)
+
+    db.reset_training_data()
+    reset_all_disabled(cfg, db, list(cfg["labels"]["track"]) + list(cfg["labels"].get("attributes", [])))
+
+    try:
+        backup_frigate_config(cfg, db, "post-reset")
+    except Exception:
+        logger.exception("could not take post-reset frigate config backup")
+
+    # keep controls_default_disabled set so labels added later stay disabled
+    db.kv_set("last_processed_at", str(time.time()))
+    logger.info("reset complete: training data wiped, controls disabled, base models kept")
+    return {"ok": True}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Errata trainer: export dataset and train")
     parser.add_argument("--config", default=None, help="path to errata config.yaml")
@@ -960,6 +1008,11 @@ def main() -> None:
     )
     parser.add_argument("--train", action="store_true", help="train a model (requires ultralytics)")
     parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="delete ALL learned/review data and files (keeps base models) and disable all labels",
+    )
+    parser.add_argument(
         "--model",
         default=None,
         help="model variant to train (e.g. yolov9s, yolo11n, yolo12n); defaults to training.model_type",
@@ -976,6 +1029,11 @@ def main() -> None:
     cfg = load_config(args.config)
     setup_logging(cfg.get("logging", {}).get("level", "INFO"))
     db = Database(cfg["database"]["path"])
+
+    if args.reset:
+        reset_training_data_files(cfg, db)
+        logger.info("reset complete: all training/review data wiped, base models kept")
+        return
 
     if args.check_boxes:
         rows = degenerate_box_events(db)

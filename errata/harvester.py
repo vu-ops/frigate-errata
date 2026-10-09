@@ -11,6 +11,45 @@ from .frigate_client import FrigateClient
 logger = logging.getLogger(__name__)
 
 
+def _flatten_strings(value) -> list[str]:
+    """Collect all string leaves from a nested JSON value."""
+    out: list[str] = []
+    if isinstance(value, str):
+        out.append(value)
+    elif isinstance(value, dict):
+        for item in value.values():
+            out.extend(_flatten_strings(item))
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            out.extend(_flatten_strings(item))
+    return out
+
+
+def extract_brands(event: dict, attribute_labels: list[str]) -> list[str]:
+    """Find configured brand attributes present on a Frigate event.
+
+    Frigate stores classification attributes in the event's ``data`` JSON
+    (either under ``attributes``/``current_attributes`` or keyed by model name)
+    and can also set a top-level ``sub_label``. We match any string leaf against
+    the configured attribute list, case-insensitively.
+    """
+    wanted = {a.lower(): a for a in attribute_labels}
+    found: dict[str, None] = {}
+
+    sub_label = event.get("sub_label")
+    if isinstance(sub_label, (list, tuple)) and sub_label:
+        sub_label = sub_label[0]
+    if isinstance(sub_label, str) and sub_label.strip().lower() in wanted:
+        found[wanted[sub_label.strip().lower()]] = None
+
+    data = event.get("data") or {}
+    for text in _flatten_strings(data):
+        key = text.strip().lower()
+        if key in wanted:
+            found[wanted[key]] = None
+    return sorted(found)
+
+
 class Harvester:
     def __init__(self, cfg: dict, db: Database, client: FrigateClient):
         self.cfg = cfg
@@ -21,9 +60,21 @@ class Harvester:
         self.lookback_hours = float(harvest["lookback_hours"])
         self.max_events = int(harvest["max_events_per_run"])
         self.max_pages = max(1, int(harvest.get("max_pages", 20)))
+        self.attribute_labels = list((cfg.get("labels", {}) or {}).get("attributes", []) or [])
+        # Labels to request from Frigate: object classes not turned off.
+        self.collect_labels = list(
+            (cfg.get("labels", {}) or {}).get("track", []) or []
+        )
 
     def run(self) -> int:
         Path(self.snapshot_dir).mkdir(parents=True, exist_ok=True)
+        # Imported lazily to avoid a config <-> controls import cycle at module load.
+        from .controls import effective_controls
+
+        controls = effective_controls(self.cfg, self.db, self.collect_labels)
+        wanted = [l for l in self.collect_labels if controls.get(l, {}).get("collect_mode", "all") != "off"]
+        labels_param = wanted or None
+
         raw = self.db.kv_get("last_processed_at")
         since = float(raw) if raw else time.time() - self.lookback_hours * 3600
         added = 0
@@ -32,7 +83,9 @@ class Harvester:
         time_to = None
         prev_oldest = None
         for page in range(self.max_pages):
-            events = self.client.events(since=since, before=time_to, limit=self.max_events)
+            events = self.client.events(
+                since=since, before=time_to, limit=self.max_events, labels=labels_param
+            )
             completed = [e for e in events if e.get("end_time")]
             for event in events:
                 try:
@@ -64,11 +117,15 @@ class Harvester:
             return False
         data = event.get("data") or {}
         description = data.get("description") or ""
-        attributes = data.get("attrs") or []
         confidence = data.get("score")
         if confidence is None:
             confidence = event.get("top_score")
         box = data.get("box")
+        sub_label = event.get("sub_label")
+        if isinstance(sub_label, (list, tuple)) and sub_label:
+            sub_label = sub_label[0]
+        sub_label = sub_label if isinstance(sub_label, str) else ""
+        brands = extract_brands(event, self.attribute_labels)
         snapshot_path = ""
         if event.get("has_snapshot"):
             dest = str(Path(self.snapshot_dir) / f"{event_id}.jpg")
@@ -81,11 +138,14 @@ class Harvester:
                 "label": event.get("label", "unknown"),
                 "confidence": confidence,
                 "description": description,
-                "attributes": json.dumps(attributes) if attributes else "",
+                "attributes": json.dumps(data.get("attributes") or brands or {}),
                 "start_time": event.get("start_time"),
                 "end_time": event.get("end_time"),
                 "box": json.dumps(box) if box else "",
                 "snapshot_path": snapshot_path,
+                "sub_label": sub_label,
             }
         )
+        for brand in brands:
+            self.db.insert_brand(event_id, brand, source="frigate")
         return True
