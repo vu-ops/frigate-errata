@@ -55,11 +55,12 @@
 <div class="meta">"Corrections" is the all-time DB correction count at publish time. "Trained on" is the dataset snapshot captured when that model was trained.</div>
 {% if versions %}
 <table>
-  <tr><th>Published</th><th>Path</th><th>Corrections</th><th>Took</th><th>Trained on</th></tr>
+  <tr><th>Published</th><th>Path</th><th>Model</th><th>Corrections</th><th>Took</th><th>Trained on</th></tr>
   {% for v in versions %}
   <tr>
     <td>{{ v.created_at | localts }}</td>
     <td>{{ v.model_path }}</td>
+    <td>{{ v.model_type or '—' }}</td>
     <td class="n">{{ v.training_count }}</td>
     <td class="n">{{ v.duration_seconds | humandur }}</td>
     <td>
@@ -113,8 +114,8 @@
       var html = '';
       if (d.error) html += '<div class="meta">Frigate: unavailable (' + esc(d.error) + ')</div>';
       else if (d.active_name) html += '<div class="meta">Active in Frigate: <strong>' + esc(d.active_name) + '</strong></div>';
-      html += '<table><tr><th>Published</th><th>Model</th><th>Corrections</th><th>Took</th><th>Trained on</th><th>Size</th><th></th></tr>';
-      if (!d.models.length) html += '<tr><td colspan="7" class="empty">No published models.</td></tr>';
+      html += '<table><tr><th>Published</th><th>Model</th><th>Variant</th><th>Corrections</th><th>Took</th><th>Trained on</th><th>Size</th><th></th></tr>';
+      if (!d.models.length) html += '<tr><td colspan="8" class="empty">No published models.</td></tr>';
       for (var i = 0; i < d.models.length; i++) {
         var m = d.models[i];
         var active = m.name === d.active_name;
@@ -123,7 +124,7 @@
           ? esc(tds.images.total + ' img · ' + tds.objects.total + ' obj · ' + tds.pseudo.images + ' pseudo')
           : '<span class="meta">not recorded</span>';
         html += '<tr><td>' + fmt(m.created_at) + '</td><td>' + esc(m.name) + (active ? ' <strong>(active)</strong>' : '') +
-          '</td><td class="n">' + (m.training_count == null ? '—' : m.training_count) + '</td><td class="n">' + fmtDur(m.duration_seconds) + '</td><td>' + trained + '</td><td class="n">' + m.size_mb + ' MB</td>' +
+          '</td><td>' + esc(m.model_type || '—') + '</td><td class="n">' + (m.training_count == null ? '—' : m.training_count) + '</td><td class="n">' + fmtDur(m.duration_seconds) + '</td><td>' + trained + '</td><td class="n">' + m.size_mb + ' MB</td>' +
           '<td>' + (active ? '' : '<button data-model="' + esc(m.name) + '" class="act">Activate</button>') + '</td></tr>';
       }
       html += '</table>';

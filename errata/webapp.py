@@ -192,6 +192,7 @@ def create_app(config: dict) -> FastAPI:
             row["dataset"] = metrics.get("dataset")
             row["duration_seconds"] = metrics.get("duration_seconds")
             row["train_seconds"] = metrics.get("train_seconds")
+            row["model_type"] = metrics.get("model_type")
             version_rows.append(row)
         ctx = {
             "counts": db.counts_by_status(),
@@ -606,6 +607,7 @@ def create_app(config: dict) -> FastAPI:
                 m["training_dataset"] = metrics.get("dataset")
                 m["duration_seconds"] = metrics.get("duration_seconds")
                 m["train_seconds"] = metrics.get("train_seconds")
+                m["model_type"] = metrics.get("model_type")
         return JSONResponse(
             {
                 "active": active,
