@@ -900,10 +900,8 @@ def create_app(config: dict) -> FastAPI:
         from .trainer import reset_training_data_files, activate_model
 
         with deploy_lock:
-            reset_training_data_files(config, db)
-
-            return_model = str(body.get("return_model", "")).strip()
-            result = {"ok": True, "wiped": True}
+            return_model = str(body.get("return_model", "")).strip() or None
+            result = reset_training_data_files(config, db, keep_model=return_model)
             if return_model:
                 result["activate"] = activate_model(config, db, return_model)
         return JSONResponse(result)

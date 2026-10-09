@@ -926,13 +926,18 @@ def skip_degenerate_boxes(db: Database) -> None:
     )
 
 
-def reset_training_data_files(cfg: dict, db: Database) -> dict:
+def reset_training_data_files(cfg: dict, db: Database, keep_model: str | None = None) -> dict:
     """Delete all learned/review data and files, keeping base models.
 
-    Used by the Reset / start-over flow. Writes disabled per-label controls,
-    then takes one final Frigate config backup so there is a rollback point.
+    Used by the Reset / start-over flow. When ``keep_model`` names a published
+    model (typically the one Frigate is currently serving), that file and the
+    shared ``labels.txt`` survive so the live detector keeps working until a
+    retrained model is deployed. Writes disabled per-label controls, then takes
+    one final Frigate config backup so there is a rollback point.
     """
     from .controls import reset_all_disabled
+
+    keep_name = Path(keep_model).name if keep_model else None
 
     dataset_dir = Path(cfg["training"]["dataset_dir"])
     for sub in ("images", "labels"):
@@ -943,9 +948,13 @@ def reset_training_data_files(cfg: dict, db: Database) -> dict:
     shutil.rmtree(Path(cfg["training"]["model_output_dir"]), ignore_errors=True)
 
     publish_dir = Path(cfg["training"]["publish_dir"]) / "published"
-    for pattern in ("errata_*.onnx", "labels.txt", "metrics.json"):
-        for path in publish_dir.glob(pattern):
-            path.unlink(missing_ok=True)
+    for path in publish_dir.glob("errata_*.onnx"):
+        if keep_name and path.name == keep_name:
+            continue
+        path.unlink(missing_ok=True)
+    (publish_dir / "metrics.json").unlink(missing_ok=True)
+    if not keep_name:
+        (publish_dir / "labels.txt").unlink(missing_ok=True)
 
     shutil.rmtree(Path(cfg["frigate"]["snapshot_dir"]), ignore_errors=True)
 
@@ -963,8 +972,9 @@ def reset_training_data_files(cfg: dict, db: Database) -> dict:
 
     # keep controls_default_disabled set so labels added later stay disabled
     db.kv_set("last_processed_at", str(time.time()))
-    logger.info("reset complete: training data wiped, controls disabled, base models kept")
-    return {"ok": True}
+    logger.info("reset complete: training data wiped, controls disabled, base models kept%s",
+                f" (kept {keep_name})" if keep_name else "")
+    return {"ok": True, "kept_model": keep_name}
 
 
 def main() -> None:
@@ -1013,6 +1023,11 @@ def main() -> None:
         help="delete ALL learned/review data and files (keeps base models) and disable all labels",
     )
     parser.add_argument(
+        "--keep-model",
+        default=None,
+        help="with --reset: name of a published model to keep (e.g. the model Frigate is currently serving, so detection keeps working until you retrain)",
+    )
+    parser.add_argument(
         "--model",
         default=None,
         help="model variant to train (e.g. yolov9s, yolo11n, yolo12n); defaults to training.model_type",
@@ -1031,7 +1046,7 @@ def main() -> None:
     db = Database(cfg["database"]["path"])
 
     if args.reset:
-        reset_training_data_files(cfg, db)
+        reset_training_data_files(cfg, db, keep_model=args.keep_model)
         logger.info("reset complete: all training/review data wiped, base models kept")
         return
 
