@@ -66,6 +66,8 @@ Frigate API ──▶ harvester ──▶ SQLite ──▶ analyzer ──▶ re
 - Synonym-aware label/description mismatch detection (configurable per class)
 - Noise-burst, low-confidence, and oversized/merged-box detection
 - In-browser box editor: move, resize, or draw the training box on any event
+- Train-button model picker: choose a YOLO11 variant (tested) or YOLO12 (flagged
+  untested) per run, without editing config
 - Three training paths: in-app button, CLI, or a Mac/Colab kit
 - Optional automatic deployment of the trained model into Frigate's config
   (with backup + rollback)

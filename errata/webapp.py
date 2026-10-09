@@ -105,6 +105,11 @@ def create_app(config: dict) -> FastAPI:
     app_version = os.environ.get("ERRATA_VERSION", "").strip() or "dev"
     templates.env.globals["app_version"] = app_version
 
+    from .trainer import MODEL_CHOICES
+
+    templates.env.globals["model_choices"] = MODEL_CHOICES
+    templates.env.globals["default_model_type"] = str(config["training"].get("model_type", "yolo11n"))
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         scheduler.start()
@@ -481,13 +486,15 @@ def create_app(config: dict) -> FastAPI:
         "ok": None,
         "detail": "no training run yet",
         "phase": None,
+        "model_type": None,
         "epoch": None,
         "epochs": None,
         "progress": None,
         "metrics": None,
     }
 
-    def _train_worker() -> None:
+    def _train_worker(model_type: str | None = None) -> None:
+        chosen = model_type or str(config["training"]["model_type"])
         train_state.update(
             {
                 "running": True,
@@ -496,6 +503,7 @@ def create_app(config: dict) -> FastAPI:
                 "ok": None,
                 "detail": "training",
                 "phase": "starting",
+                "model_type": chosen,
                 "epoch": None,
                 "epochs": None,
                 "progress": None,
@@ -510,7 +518,7 @@ def create_app(config: dict) -> FastAPI:
             exported = export_dataset(config, db)
             train_state["detail"] = "training"
             result = run_training(
-                config, db, device=None, on_progress=train_state.update
+                config, db, device=None, on_progress=train_state.update, model_type=model_type
             )
             result["exported"] = exported
             db.kv_set("last_train_at", str(time.time()))
@@ -537,7 +545,12 @@ def create_app(config: dict) -> FastAPI:
             )
 
     @router.post("/api/train")
-    def start_train():
+    def start_train(model_type: str = ""):
+        from .trainer import ALL_MODELS
+
+        model_type = model_type.strip()
+        if model_type and model_type not in ALL_MODELS:
+            return JSONResponse({"ok": False, "detail": f"unknown model '{model_type}'"}, status_code=400)
         if not config["training"].get("enabled", True):
             return JSONResponse(
                 {"ok": False, "detail": "training is disabled in this container; download the Mac kit or use deploy/train.sh"},
@@ -550,8 +563,13 @@ def create_app(config: dict) -> FastAPI:
                 {"ok": False, "detail": "ultralytics is not installed in this image; use the Mac kit or deploy/train.sh"},
                 status_code=503,
             )
-        threading.Thread(target=_train_worker, name="errata-train", daemon=True).start()
-        return JSONResponse({"ok": True, "detail": "training started"}, status_code=202)
+        threading.Thread(
+            target=_train_worker, args=(model_type or None,), name="errata-train", daemon=True
+        ).start()
+        return JSONResponse(
+            {"ok": True, "detail": "training started", "model_type": model_type or config["training"]["model_type"]},
+            status_code=202,
+        )
 
     deploy_lock = threading.Lock()
 

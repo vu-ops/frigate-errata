@@ -188,7 +188,11 @@ training:
   model_output_dir: "/data/models" # intermediate training artifacts
   publish_dir: "/publish"          # host models/ dir (mounted into Frigate)
   keep_versions: 20                # how many published models to retain
-  model_type: "yolo11n"            # ultralytics base model
+  model_type: "yolo11n"            # default ultralytics base model. The header
+                                   # Train button also has a variant picker
+                                   # (yolo11n/s/m/l/x tested; yolo12n/s/m/l/x
+                                   # offered but flagged untested in the UI);
+                                   # a picked variant overrides this for that run
   epochs: 100
   imgsz: 640
   device: "xpu"                    # ultralytics device: xpu (Intel Arc, default),

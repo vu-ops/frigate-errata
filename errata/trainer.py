@@ -18,6 +18,16 @@ from .vocab import effective_synonyms, label_in_text
 
 logger = logging.getLogger(__name__)
 
+# Model variants offered in the training UI. The yolo11 line is tested
+# end-to-end through the ONNX -> OpenVINO -> Frigate yolo-generic path; the
+# yolo12 entries export a compatible [1, 4+nc, 8400] head but are untested in
+# Frigate, so the UI flags them.
+MODEL_CHOICES = {
+    "tested": ["yolo11n", "yolo11s", "yolo11m", "yolo11l", "yolo11x"],
+    "untested": ["yolo12n", "yolo12s", "yolo12m", "yolo12l", "yolo12x"],
+}
+ALL_MODELS = [*MODEL_CHOICES["tested"], *MODEL_CHOICES["untested"]]
+
 
 def _select_pseudo_labels(cfg: dict, db: Database, class_map: dict) -> list:
     pseudo_cfg = cfg["training"].get("pseudo_labels", {}) or {}
@@ -566,6 +576,7 @@ def run_training(
     db: Database,
     device: str | None = None,
     on_progress=None,
+    model_type: str | None = None,
 ) -> dict:
     import multiprocessing as mp
 
@@ -576,6 +587,7 @@ def run_training(
     from ultralytics import YOLO
 
     training = cfg["training"]
+    use_model = str(model_type or training["model_type"])
     total_epochs = int(training["epochs"])
     requested_device = str(device) if device is not None else str(training.get("device", "cpu"))
     data_yaml = Path(training["dataset_dir"]) / "data.yaml"
@@ -590,7 +602,7 @@ def run_training(
             logger.debug("training progress callback failed", exc_info=True)
 
     def _train(device: str):
-        model = YOLO(f"{training['model_type']}.pt")
+        model = YOLO(f"{use_model}.pt")
 
         def _on_train_start(trainer):
             emit(
@@ -677,6 +689,7 @@ def run_training(
         "epochs": total_epochs,
         "imgsz": int(training["imgsz"]),
         "device": device,
+        "model_type": use_model,
         "duration_seconds": duration_seconds,
         "train_seconds": round(train_seconds, 1),
         "corrections_total": db.corrections_count(),
@@ -834,6 +847,11 @@ def main() -> None:
         help="delete events (and their corrections) whose snapshot file is missing, freeing image-less queue entries",
     )
     parser.add_argument("--train", action="store_true", help="train a model (requires ultralytics)")
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="model variant to train (e.g. yolo11n, yolo11s, yolo12n); defaults to training.model_type",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -889,7 +907,7 @@ def main() -> None:
         logger.info("no corrections collected yet, nothing to train on")
         return
     export_dataset(cfg, db)
-    run_training(cfg, db)
+    run_training(cfg, db, model_type=args.model)
 
 
 if __name__ == "__main__":

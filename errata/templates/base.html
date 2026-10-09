@@ -13,6 +13,7 @@ header a { color: #9fb4ff; text-decoration: none; font-weight: 600; }
 header .brand { color: #fff; font-size: 1.05rem; letter-spacing: 0.02em; }
 header .version { color: #6b7488; font-size: 0.78rem; font-weight: 600; margin-left: -1rem; }
 header button.running { background: #243044; border-color: #3a4152; color: #9ec1ff; cursor: default; }
+header select { background: #1b2130; color: #e6e6e6; border: 1px solid #2b3347; border-radius: 6px; padding: 0.3rem 0.5rem; font-size: 0.85rem; }
 main { padding: 1.25rem; max-width: 1400px; margin: 0 auto; }
 a { color: #9fb4ff; }
 .msg { background: #1d2b1f; border: 1px solid #2f5233; padding: 0.5rem 0.75rem; border-radius: 8px; margin-bottom: 1rem; font-size: 0.9rem; }
@@ -99,8 +100,16 @@ details table { margin: 0.4rem 0 0.2rem; }
   <a href="{{ base }}/summary">Summary</a>
   <a href="{{ base }}/synonyms">Synonyms</a>
   <a href="{{ base }}/api/train/mac-kit.zip">Mac kit</a>
+  <select id="train-model" title="Model variant to train">
+    <optgroup label="YOLO11 (tested)">
+      {% for m in model_choices.tested %}<option value="{{ m }}" {% if m == default_model_type %}selected{% endif %}>{{ m }}</option>{% endfor %}
+    </optgroup>
+    <optgroup label="YOLO12 (untested)">
+      {% for m in model_choices.untested %}<option value="{{ m }}">{{ m }} ⚠ untested</option>{% endfor %}
+    </optgroup>
+  </select>
   <button id="run-now" title="Fetch new events from Frigate and analyze them" onclick="runNow(this)">Fetch latest</button>
-  <button id="train-btn" title="Retrain the model on CPU with collected corrections" onclick="startTrain(this)">Train</button>
+  <button id="train-btn" title="Retrain the model on the selected variant with collected corrections" onclick="startTrain(this)">Train</button>
 </header>
 <main>
 {% block content %}{% endblock %}
@@ -157,6 +166,7 @@ function trainLabel(s) {
 }
 function trainDetail(s) {
   var parts = [];
+  if (s.model_type) parts.push(s.model_type);
   if (s.epochs) parts.push('epoch ' + (s.epoch || 0) + '/' + s.epochs + ' (' + Math.round((s.progress || 0) * 100) + '%)');
   var m = s.metrics || {};
   if (m.mAP50 != null) parts.push('mAP50 ' + m.mAP50);
@@ -198,11 +208,17 @@ async function refreshTrainState() {
 }
 async function startTrain(btn) {
   if (btn.disabled) return;
-  if (!confirm('Start a training run now?')) return;
+  var sel = document.getElementById('train-model');
+  var model = sel ? sel.value : '';
+  var untested = model.indexOf('yolo12') === 0;
+  var prompt = 'Start a training run' + (model ? ' with ' + model : '') + '?';
+  if (untested) prompt += ' This model is UNTESTED with Frigate and may not load inside Frigate.';
+  if (!confirm(prompt)) return;
   btn.disabled = true;
   btn.textContent = 'Training…';
   try {
-    const r = await fetch('{{ base }}/api/train', { method: 'POST' });
+    var url = '{{ base }}/api/train' + (model ? '?model_type=' + encodeURIComponent(model) : '');
+    const r = await fetch(url, { method: 'POST' });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok) {
       alert('Could not start training: ' + (j.detail || r.status));
@@ -210,7 +226,7 @@ async function startTrain(btn) {
       return;
     }
     sawRunning = true;
-    showTraining({ phase: 'starting' });
+    showTraining({ phase: 'starting', model_type: j.model_type || model });
     ensureTrainPoll();
   } catch (err) {
     resetTraining();
