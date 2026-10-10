@@ -14,7 +14,7 @@ header .brand { color: #fff; font-size: 1.05rem; letter-spacing: 0.02em; }
 header .version { color: #6b7488; font-size: 0.78rem; font-weight: 600; margin-left: -1rem; }
 header button.running { background: #243044; border-color: #3a4152; color: #9ec1ff; cursor: default; }
 header select { background: #1b2130; color: #e6e6e6; border: 1px solid #2b3347; border-radius: 6px; padding: 0.3rem 0.5rem; font-size: 0.85rem; }
-main { padding: 1.25rem; max-width: 1400px; margin: 0 auto; }
+main { padding: 1.25rem; margin: 0 auto; }
 a { color: #9fb4ff; }
 .msg { background: #1d2b1f; border: 1px solid #2f5233; padding: 0.5rem 0.75rem; border-radius: 8px; margin-bottom: 1rem; font-size: 0.9rem; }
 .filters form { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: flex-end; margin-bottom: 1rem; }
@@ -24,7 +24,11 @@ button { cursor: pointer; }
 button:hover { filter: brightness(1.15); }
 button.primary { background: #2f6feb; border-color: #2f6feb; color: #fff; font-weight: 600; }
 button.warn { background: #7a2e2e; border-color: #8f3b3b; color: #fff; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 0.9rem; }
+.grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.9rem; width: 100%; }
+@media (max-width: 1400px) { .grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 1100px) { .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 800px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .grid { grid-template-columns: 1fr; } }
 .card { background: #161a22; border: 1px solid #232833; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; position: relative; }
 .card.selectable { cursor: pointer; }
 .card img { width: 100%; height: auto; display: block; background: #0a0c10; aspect-ratio: 1 / 1; object-fit: cover; }
