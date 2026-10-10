@@ -624,7 +624,7 @@ review:
     api_key: "${OPENROUTER_API_KEY:-}"
     base_url: "https://openrouter.ai/api/v1"
     timeout: 60
-    max_image_px: 1024
+    max_image_px: 1280
     default_model: "~google/gemini-flash-latest"
     models:
       - name: "Gemini Flash (latest)"

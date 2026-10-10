@@ -40,8 +40,12 @@ def _schema() -> dict:
         "schema": {
             "type": "object",
             "properties": {
-                "label": {"type": "string", "description": "best allowed label, or 'none'"},
-                "description": {"type": "string", "description": "one-sentence description"},
+                "matches": {
+                    "type": "boolean",
+                    "description": "does the object inside the given box match the detector label?",
+                },
+                "label": {"type": "string", "description": "best allowed label for the object in the box, or 'none'"},
+                "description": {"type": "string", "description": "one-sentence description of the object inside the box"},
                 "confidence": {"type": "number", "description": "0..1 confidence"},
                 "box": {
                     "type": "object",
@@ -56,34 +60,60 @@ def _schema() -> dict:
                     "additionalProperties": False,
                 },
             },
-            "required": ["label", "description", "confidence", "box"],
+            "required": ["matches", "label", "description", "confidence", "box"],
             "additionalProperties": False,
         },
     }
 
 
-def _prompt(kind: str, expected: str, allowed: list[str]) -> str:
+def _parse_box(box) -> tuple[float, float, float, float] | None:
+    if not box:
+        return None
+    try:
+        values = json.loads(box) if isinstance(box, str) else box
+        x, y, w, h = (float(v) for v in values)
+    except (ValueError, TypeError):
+        return None
+    return x, y, w, h
+
+
+def _box_hint(box) -> str:
+    parsed = _parse_box(box)
+    if not parsed:
+        return ""
+    x, y, w, h = parsed
+    return (
+        f" The detector's bounding box is normalized x,y,w,h = "
+        f"({x:.3f}, {y:.3f}, {w:.3f}, {h:.3f}) of the full frame (top-left origin, 0..1); "
+        f"look only at the object inside that box."
+    )
+
+
+def _prompt(kind: str, expected: str, allowed: list[str], box) -> str:
     labels = ", ".join(allowed)
+    hint = _box_hint(box)
     if kind == "brand":
         return (
             f"This is a security-camera snapshot. A detector reports the object as "
-            f"'{expected}'. Decide whether the object carries the delivery brand "
-            f"'{expected}'. Choose the single best matching label from: {labels} "
-            f"(use \"none\" if the brand is not present). Give a one-sentence description. "
-            f"For a brand, bounding boxes are not needed: set box.found=false."
+            f"'{expected}'.{hint} Decide whether the object inside that box carries the "
+            f"delivery brand '{expected}'. Choose the single best matching label from: "
+            f"{labels} (use \"none\" if the brand is not present). Give a one-sentence "
+            f"description. For a brand, bounding boxes are not needed: set box.found=false."
         )
     return (
         f"This is a security-camera snapshot. A detector labeled the object as "
-        f"'{expected}'. Identify the single main object of interest. Choose the best "
-        f"label from: {labels} (use \"none\" if none apply). Give a one-sentence "
-        f"description. If there is exactly one clear object, return its bounding box as "
-        f"normalized x,y,w,h with a top-left origin and values 0..1 of the full frame; "
-        f"otherwise set box.found=false."
+        f"'{expected}'.{hint} Judge only that object, not the rest of the scene. "
+        f"(1) Does the object inside the box match '{expected}'? (2) If not, choose the "
+        f"correct label from: {labels} (use \"none\" if none apply). (3) Give a "
+        f"one-sentence description of the object inside the box. (4) If the box is loose "
+        f"or misplaced, return an improved bounding box for that same object as "
+        f"normalized x,y,w,h of the full frame; otherwise return the box unchanged with "
+        f"box.found=true."
     )
 
 
 def analyze(cfg: dict, image_path: str, kind: str, expected: str,
-            allowed_labels: list[str], model: str | None = None) -> dict:
+            allowed_labels: list[str], model: str | None = None, box=None) -> dict:
     """Ask an OpenRouter vision model for a second opinion on one snapshot."""
     gh = help_settings(cfg)
     key = str(gh.get("api_key") or "").strip()
@@ -110,7 +140,7 @@ def analyze(cfg: dict, image_path: str, kind: str, expected: str,
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": _prompt(kind, expected, allowed_labels)},
+                    {"type": "text", "text": _prompt(kind, expected, allowed_labels, box)},
                     {"type": "image_url", "image_url": {"url": data_url}},
                 ],
             }
@@ -134,12 +164,13 @@ def analyze(cfg: dict, image_path: str, kind: str, expected: str,
         logger.exception("genai help request failed")
         return {"ok": False, "error": str(exc)}
 
-    box = data.get("box") or {}
+    out_box = data.get("box") or {}
     return {
         "ok": True,
         "model": use_model,
+        "matches": bool(data.get("matches")),
         "label": str(data.get("label") or ""),
         "description": str(data.get("description") or ""),
         "confidence": data.get("confidence"),
-        "box": {k: box.get(k) for k in ("found", "x", "y", "w", "h")},
+        "box": {k: out_box.get(k) for k in ("found", "x", "y", "w", "h")},
     }

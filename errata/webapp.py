@@ -734,7 +734,7 @@ def create_app(config: dict) -> FastAPI:
     @router.get("/api/snapshots/{event_id}/preview.jpg")
     def snapshot_preview(event_id: str):
         """Wider-context preview around the object (training crop is tighter)."""
-        from .imaging import region_crop_pil
+        from .imaging import region_crop_pil_fit as region_crop_pil
 
         path = _snapshot_or_404(event_id)
         row = db.get_event(event_id)
@@ -795,7 +795,7 @@ def create_app(config: dict) -> FastAPI:
         else:
             expected = row["label"]
             allowed = labels
-        result = genai.analyze(config, path, kind, expected, allowed, model or None)
+        result = genai.analyze(config, path, kind, expected, allowed, model or None, box=row["box"])
         return JSONResponse(result, status_code=200 if result.get("ok") else 400)
 
     @router.get("/api/queue.json")

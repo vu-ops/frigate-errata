@@ -285,39 +285,57 @@ if (typeof errataSelect === 'function') {
     document.body.appendChild(f); f.submit();
   }
 
+  function clamp01(v) { v = +v; return isFinite(v) ? Math.min(Math.max(v, 0), 1) : 0; }
+
   function render(res, btn) {
     var kind = btn.dataset.kind, eventId = btn.dataset.event;
+    var expected = kind === 'brand' ? (btn.dataset.expected || '') : (btn.dataset.label || '');
     var box = res.box || {};
+    var label = (res.label || '').trim();
+    var usable = !!label && label.toLowerCase() !== 'none';
+    var imgHtml = '<img src="' + BASE + '/api/snapshots/' + encodeURIComponent(eventId) + '/clean.jpg" alt="snapshot">';
+    var overlay = '';
+    if (kind !== 'brand' && box && box.found) {
+      overlay = '<span class="gh-box" style="left:' + (clamp01(box.x) * 100) + '%;top:' + (clamp01(box.y) * 100) +
+        '%;width:' + (clamp01(box.w) * 100) + '%;height:' + (clamp01(box.h) * 100) + '%">' +
+        (usable ? '<span>' + esc(label) + '</span>' : '') + '</span>';
+    }
+    var verdict = res.matches
+      ? '<span class="gh-agree">Model agrees: ' + esc(label || expected) + ' ✓</span>'
+      : (usable ? '<span class="gh-disagree">Model disagrees — suggests ' + esc(label) + '</span>'
+                : '<span class="gh-disagree">No matching label</span>');
     var html = '<div class="section-title">' + esc(res.model) + '</div>';
-    html += '<div><span class="badge label">' + esc(res.label || 'none') + '</span> ';
-    if (res.confidence != null) html += '<span class="meta">' + Math.round((res.confidence || 0) * 100) + '% match</span>';
+    html += '<div class="meta">' + verdict + ' ';
+    if (res.confidence != null) html += '<span>' + Math.round((res.confidence || 0) * 100) + '%</span>';
     html += '</div>';
-    html += '<img src="' + BASE + '/api/snapshots/' + encodeURIComponent(eventId) + '/clean.jpg" alt="snapshot">';
+    html += '<div class="gh-imgwrap">' + imgHtml + overlay + '</div>';
     html += '<p class="desc">' + esc(res.description || '') + '</p>';
     card.innerHTML = html;
     var actions = document.createElement('div');
     actions.className = 'actions';
     if (kind === 'brand') {
-      var ok = (res.label || '').toLowerCase() === (btn.dataset.expected || '').toLowerCase();
       var b1 = document.createElement('button'); b1.className = 'chip confirm';
-      b1.textContent = ok ? ('Confirm ' + btn.dataset.expected) : 'Confirm anyway';
+      b1.textContent = res.matches ? ('Confirm ' + btn.dataset.expected) : 'Confirm anyway';
       b1.onclick = function () { submitBrand(btn.dataset.brandId, 'confirm', btn.dataset.returnTo || ''); };
       var b2 = document.createElement('button'); b2.className = 'chip reject'; b2.textContent = 'Reject';
       b2.onclick = function () { submitBrand(btn.dataset.brandId, 'rejected', btn.dataset.returnTo || ''); };
       actions.appendChild(b1); actions.appendChild(b2);
-    } else {
-      var lbl = res.label || btn.dataset.label || '';
+    } else if (usable) {
       var rt = btn.dataset.returnTo || '';
       var bL = document.createElement('button'); bL.className = 'chip detected';
-      bL.textContent = 'Use label: ' + lbl;
-      bL.onclick = function () { window.openBoxWith(eventId, btn.dataset.box || '', lbl, lbl, rt); close(); };
+      bL.textContent = 'Use label: ' + label;
+      bL.onclick = function () { window.openBoxWith(eventId, btn.dataset.box || '', label, label, rt); close(); };
       actions.appendChild(bL);
       if (box && box.found) {
-        var arr = JSON.stringify([+box.x || 0, +box.y || 0, +box.w || 0, +box.h || 0]);
+        var arr = JSON.stringify([clamp01(box.x), clamp01(box.y), clamp01(box.w), clamp01(box.h)]);
         var bB = document.createElement('button'); bB.className = 'primary'; bB.textContent = 'Use box';
-        bB.onclick = function () { window.openBoxWith(eventId, arr, lbl, lbl, rt); close(); };
+        bB.onclick = function () { window.openBoxWith(eventId, arr, label, label, rt); close(); };
         actions.appendChild(bB);
       }
+    } else {
+      var warn = document.createElement('span'); warn.className = 'gh-disagree';
+      warn.textContent = '⚠ Human classification required';
+      actions.appendChild(warn);
     }
     var bc = document.createElement('button'); bc.type = 'button'; bc.textContent = 'Close'; bc.onclick = close;
     actions.appendChild(bc);

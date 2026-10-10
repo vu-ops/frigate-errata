@@ -76,3 +76,34 @@ def region_crop_pil(img, box, imgsz: int, min_side: int = MIN_SIDE, scale: float
         piece = img.crop((sx0, sy0, sx0 + cw, sy0 + ch))
         canvas.paste(piece, (dx0, dy0))
     return canvas.resize((imgsz, imgsz), Image.BILINEAR), box_c
+
+
+def region_crop_pil_fit(img, box, imgsz: int, min_side: int = MIN_SIDE, scale: float = CROP_SCALE):
+    """Like region_crop_pil but clamped fully inside the frame -- no black padding.
+
+    Used by the review preview so wide/short cameras don't show black bars: the
+    square is shrunk to the frame and shifted inward instead of being padded.
+    Training still uses the padded geometry (region_crop_cv2).
+    """
+    from PIL import Image
+
+    fw, fh = img.size
+    x0, y0, side, _ = region_geometry(box, fw, fh, min_side=min_side, scale=scale)
+    side = max(4, min(side, fw, fh))
+    x0 = min(max(int(x0), 0), max(0, fw - side))
+    y0 = min(max(int(y0), 0), max(0, fh - side))
+    crop = img.crop((x0, y0, x0 + side, y0 + side)).resize((imgsz, imgsz), Image.BILINEAR)
+    box_c = None
+    parsed = None
+    try:
+        parsed = box
+        if parsed is not None:
+            px, py, pw, ph = parsed[0] * fw, parsed[1] * fh, parsed[2] * fw, parsed[3] * fh
+            bx = min(max((px - x0) / side, 0.0), 1.0)
+            by = min(max((py - y0) / side, 0.0), 1.0)
+            bw = min(max(pw / side, 0.0), 1.0)
+            bh = min(max(ph / side, 0.0), 1.0)
+            box_c = (bx, by, bw, bh)
+    except (TypeError, ValueError, IndexError):
+        box_c = None
+    return crop, box_c

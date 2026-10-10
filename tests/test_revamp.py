@@ -279,20 +279,35 @@ class TestGenAIHelp(Base):
 
             def json(self):
                 return {"choices": [{"message": {"content": json.dumps({
-                    "label": "cat", "description": "a gray cat", "confidence": 0.9,
+                    "matches": True, "label": "cat", "description": "a gray cat",
+                    "confidence": 0.9,
                     "box": {"found": True, "x": 0.1, "y": 0.2, "w": 0.3, "h": 0.4},
                 })}}]}
 
         orig = genai_help.requests.post
         genai_help.requests.post = lambda *a, **k: Resp()
         try:
-            res = genai_help.analyze(self.cfg, path, "object", "cat", ["cat", "dog"], "m")
+            res = genai_help.analyze(self.cfg, path, "object", "cat", ["cat", "dog"], "m",
+                                     box="[0.2, 0.3, 0.1, 0.1]")
         finally:
             genai_help.requests.post = orig
         self.assertTrue(res["ok"])
+        self.assertTrue(res["matches"])
         self.assertEqual(res["label"], "cat")
         self.assertTrue(res["box"]["found"])
         self.assertAlmostEqual(res["box"]["w"], 0.3)
+
+
+class TestPreview(Base):
+    def test_preview_fit_has_no_black_padding(self):
+        from errata.imaging import region_crop_pil, region_crop_pil_fit
+
+        img = Image.new("RGB", (1816, 816), (50, 60, 70))
+        box = (0.7836, 0.8946, 0.0402, 0.0944)  # bottom edge of a wide frame
+        padded, _ = region_crop_pil(img, box, 640, scale=1.33)
+        fitted, _ = region_crop_pil_fit(img, box, 640, scale=1.33)
+        self.assertTrue(any(c[1] == (0, 0, 0) for c in padded.getcolors(maxcolors=1 << 20)))
+        self.assertFalse(any(c[1] == (0, 0, 0) for c in fitted.getcolors(maxcolors=1 << 20)))
 
 
 class TestControlsPage(Base):

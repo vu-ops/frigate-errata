@@ -175,7 +175,7 @@ review:
     api_key: "${OPENROUTER_API_KEY:-}"   # or a literal key
     base_url: "https://openrouter.ai/api/v1"
     timeout: 60
-    max_image_px: 1024
+    max_image_px: 1280
     default_model: "~google/gemini-flash-latest"
     models:
       - { name: "Gemini Flash (latest)", id: "~google/gemini-flash-latest" }
@@ -415,7 +415,7 @@ else to do. Otherwise create a wrapper unit or just use
 | `POST /errata/brand/{id}` / `POST /errata/brands/bulk` | Confirm/reject a brand review item (metadata only) |
 | `GET /errata/api/snapshots/{id}/crop.jpg` | The actual training crop for an event (matches the trainer's region crop) |
 | `GET /errata/api/snapshots/{id}/preview.jpg` | Wider-context crop used by the review grid (scale `review.preview_scale`, rendered at `review.preview_imgsz`) |
-| `POST /errata/api/genai_help/{id}` | Body `{"model": "<id>", "kind": "object"\|"brand", "expected": "<brand>"}`. Sends the clean snapshot to OpenRouter for a second opinion; returns `{label, description, confidence, box}`. 503 when disabled (no API key). Enabled automatically when `review.genai_help.api_key` is set |
+| `POST /errata/api/genai_help/{id}` | Body `{"model": "<id>", "kind": "object"\|"brand", "expected": "<brand>"}`. Sends the clean full-frame snapshot plus the detector's box coordinates to OpenRouter; returns `{matches, label, description, confidence, box}` where `box` is an improved full-frame box. 503 when disabled (no API key). Enabled automatically when `review.genai_help.api_key` is set |
 | `GET /errata/base-models` / `POST /errata/base-models/import-plus` / `POST /errata/base-models/upload` / `POST /errata/base-models/{name}/delete` | Base-model registry, Frigate+ import (one-time key), uploads |
 | `POST /errata/api/reset` | Body `{"confirm": "RESET", "return_model": "<optional published model>"}`. Wipes all learned/review data + files, disables all label controls (base models kept), optionally re-activates a kept model, then saves a final Frigate config backup |
 | `GET /errata/api/train/status` | Training job state (running / finished / error + detail); also shown on the Summary page |

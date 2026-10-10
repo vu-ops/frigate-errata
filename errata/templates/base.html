@@ -44,6 +44,12 @@ button.warn { background: #7a2e2e; border-color: #8f3b3b; color: #fff; }
 #genai-panel[hidden] { display: none; }
 .gh-card { background: #161a22; border: 1px solid #232833; border-radius: 10px; padding: 1rem; max-width: 680px; max-height: 92vh; overflow: auto; display: flex; flex-direction: column; gap: 0.6rem; }
 .gh-card img { max-width: 100%; border-radius: 6px; }
+.gh-imgwrap { position: relative; display: inline-block; line-height: 0; }
+.gh-imgwrap img { display: block; }
+.gh-box { position: absolute; border: 2px solid #00dcff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7); pointer-events: none; box-sizing: border-box; }
+.gh-box span { position: absolute; left: 0; top: -16px; background: #000; color: #00dcff; font-size: 0.7rem; padding: 0 4px; white-space: nowrap; }
+.gh-agree { color: #a8e6b8; font-weight: 600; }
+.gh-disagree { color: #ffc49d; font-weight: 600; }
 .card .body { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; flex: 1; }
 .meta { font-size: 0.8rem; color: #8a93a6; display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
 .badge { padding: 0.1rem 0.5rem; border-radius: 99px; font-size: 0.72rem; font-weight: 600; border: 1px solid transparent; white-space: nowrap; }
