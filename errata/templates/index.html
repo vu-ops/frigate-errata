@@ -164,6 +164,13 @@
               <input type="hidden" name="action" value="false_positive">
               <button class="chip reject" title="Mark false positive">FP</button>
             </form>
+            {% if not is_reviewed %}
+            <form method="post" action="{{ base }}/review/{{ row.id }}">
+              <input type="hidden" name="return_to" value="{{ return_to }}">
+              <input type="hidden" name="action" value="ignore">
+              <button class="chip" title="Ignore this event">Ignore</button>
+            </form>
+            {% endif %}
             {% if is_reviewed %}
             <form method="post" action="{{ base }}/review/{{ row.id }}">
               <input type="hidden" name="return_to" value="{{ return_to }}">
