@@ -84,15 +84,21 @@ class Scheduler:
         return stats
 
     def _retention(self) -> int:
-        keep = int(self.cfg["review"].get("auto_keep_per_label", 150))
-        if keep <= 0:
-            return 0
+        from .controls import effective_controls
+
+        default_keep = int(self.cfg["review"].get("auto_keep_per_label", 150))
+        track = list((self.cfg.get("labels", {}) or {}).get("track", []) or [])
+        controls = effective_controls(self.cfg, self.db, track)
+        keep_by_label: dict[str, int] = {}
+        for label in track:
+            value = (controls.get(label, {}) or {}).get("keep")
+            keep_by_label[label] = int(value) if value is not None else default_keep
         now = time.time()
         last = self.db.kv_get("last_prune_at")
         if last and (now - float(last)) < 86400:
             return 0
         self.db.kv_set("last_prune_at", str(now))
-        candidates = self.db.prune_candidates(keep)
+        candidates = self.db.prune_candidates(keep_by_label, default_keep)
         by_bucket: dict = {}
         for row in candidates:
             path = row["snapshot_path"]
@@ -102,18 +108,15 @@ class Scheduler:
                 except Exception:
                     logger.exception("failed to delete snapshot %s", path)
             self.db.clear_snapshot(row["id"])
-            by_bucket[(row["bucket"], row["bucket_label"])] = (
-                by_bucket.get((row["bucket"], row["bucket_label"]), 0) + 1
-            )
+            by_bucket[row["bucket_label"]] = by_bucket.get(row["bucket_label"], 0) + 1
         if candidates:
             logger.info(
-                "nightly prune removed %d snapshots beyond the %d-per-label cap (%d buckets affected)",
+                "nightly prune removed %d snapshot(s) beyond the per-label cap (%d labels affected)",
                 len(candidates),
-                keep,
                 len(by_bucket),
             )
-            for (bucket, label), n in sorted(by_bucket.items()):
-                logger.info("prune bucket %s/%s: removed %d", bucket, label, n)
+            for label, n in sorted(by_bucket.items()):
+                logger.info("prune label %s: removed %d (keep %s)", label, n, keep_by_label.get(label, default_keep))
         return len(candidates)
 
     def _purge_ignored(self) -> int:

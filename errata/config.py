@@ -120,6 +120,7 @@ def control_defaults(config: dict) -> dict:
         "include_training": True,
         "auto_confirm": True,
         "pseudo_labels": True,
+        "keep": None,
         **(controls.get("defaults") or {}),
     }
 

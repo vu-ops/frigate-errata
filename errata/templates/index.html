@@ -50,6 +50,19 @@
   </form>
 </div>
 
+{% if genai_help.enabled %}
+<div class="filters">
+  <form onsubmit="return false">
+    <label>GenAI Help model
+      <select id="gh-model" onchange="localStorage.setItem('errata_gh_model', this.value)">
+        {% for m in genai_help.models %}<option value="{{ m.id }}" {% if m.id == genai_help.default_model %}selected{% endif %}>{{ m.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <span class="meta">Ask a vision model for a second opinion. The snapshot is sent to OpenRouter.</span>
+  </form>
+</div>
+{% endif %}
+
 <div class="section-head">Objects ({{ total }} matching · {{ pending_count }} pending)</div>
 <div id="objects">
   <form id="obj-bulk" method="post" action="{{ base }}/bulk/selected" data-section="objects" data-ids="event_ids" onsubmit="return errataInjectIds(this)">
@@ -106,6 +119,13 @@
                     data-label="{{ row.label }}"
                     data-default-label="{{ default_label }}"
                     data-return-to="{{ return_to }}">Edit</button>
+            {% if genai_help.enabled %}
+            <button type="button" class="chip" title="Ask a vision model for a second opinion"
+                    onclick="genaiHelp(this)"
+                    data-event="{{ row.id }}" data-kind="object"
+                    data-box="{{ row.box or '' }}" data-label="{{ row.label }}"
+                    data-return-to="{{ return_to }}">GenAI Help</button>
+            {% endif %}
             <form method="post" action="{{ base }}/review/{{ row.id }}">
               <input type="hidden" name="return_to" value="{{ return_to }}">
               <input type="hidden" name="action" value="confirm">
@@ -197,6 +217,12 @@
           {% if b.description %}<p class="desc">{{ b.description }}</p>{% endif %}
           <div class="quick">
             <button type="button" class="chip edit" onclick="openLightbox('{{ base }}/api/snapshots/{{ b.event_id }}.jpg')">Full frame</button>
+            {% if genai_help.enabled %}
+            <button type="button" class="chip" title="Ask a vision model whether this brand is present"
+                    onclick="genaiHelp(this)"
+                    data-event="{{ b.event_id }}" data-kind="brand" data-expected="{{ b.brand }}"
+                    data-brand-id="{{ b.id }}" data-return-to="{{ return_to }}">GenAI Help</button>
+            {% endif %}
             <form method="post" action="{{ base }}/brand/{{ b.id }}">
               <input type="hidden" name="return_to" value="{{ return_to }}">
               <button class="chip confirm" name="action" value="confirm">Confirm</button>
@@ -215,6 +241,7 @@
 </div>
 
 {% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+<div id="genai-panel" hidden><div class="gh-card" id="gh-card"></div></div>
 <div class="stat-grid">
   <div class="stat"><div class="n">{{ pending_count }}</div><div class="t">Objects pending</div></div>
   <div class="stat"><div class="n">{{ brand_pending_count }}</div><div class="t">Brands pending</div></div>
@@ -223,5 +250,96 @@
 <script>
 errataSelect('objects', 'obj-toolbar', 'obj-count');
 errataSelect('brands', 'brand-toolbar', 'brand-count');
+
+(function () {
+  var BASE = '{{ base }}';
+  var panel = document.getElementById('genai-panel');
+  if (!panel) return;
+  var card = document.getElementById('gh-card');
+  var sel = document.getElementById('gh-model');
+  var stored = localStorage.getItem('errata_gh_model');
+  if (sel && stored) {
+    for (var i = 0; i < sel.options.length; i++) {
+      if (sel.options[i].value === stored) { sel.selectedIndex = i; break; }
+    }
+  }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+  function close() { panel.hidden = true; card.innerHTML = ''; }
+  panel.addEventListener('click', function (e) { if (e.target === panel) close(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !panel.hidden) close(); });
+
+  function submitBrand(bid, action, rt) {
+    var f = document.createElement('form');
+    f.method = 'post'; f.action = BASE + '/brand/' + bid;
+    [['action', action], ['return_to', rt]].forEach(function (kv) {
+      var i = document.createElement('input'); i.type = 'hidden'; i.name = kv[0]; i.value = kv[1]; f.appendChild(i);
+    });
+    document.body.appendChild(f); f.submit();
+  }
+
+  function render(res, btn) {
+    var kind = btn.dataset.kind, eventId = btn.dataset.event;
+    var box = res.box || {};
+    var html = '<div class="section-title">' + esc(res.model) + '</div>';
+    html += '<div><span class="badge label">' + esc(res.label || 'none') + '</span> ';
+    if (res.confidence != null) html += '<span class="meta">' + Math.round((res.confidence || 0) * 100) + '% match</span>';
+    html += '</div>';
+    html += '<img src="' + BASE + '/api/snapshots/' + encodeURIComponent(eventId) + '/clean.jpg" alt="snapshot">';
+    html += '<p class="desc">' + esc(res.description || '') + '</p>';
+    card.innerHTML = html;
+    var actions = document.createElement('div');
+    actions.className = 'actions';
+    if (kind === 'brand') {
+      var ok = (res.label || '').toLowerCase() === (btn.dataset.expected || '').toLowerCase();
+      var b1 = document.createElement('button'); b1.className = 'chip confirm';
+      b1.textContent = ok ? ('Confirm ' + btn.dataset.expected) : 'Confirm anyway';
+      b1.onclick = function () { submitBrand(btn.dataset.brandId, 'confirm', btn.dataset.returnTo || ''); };
+      var b2 = document.createElement('button'); b2.className = 'chip reject'; b2.textContent = 'Reject';
+      b2.onclick = function () { submitBrand(btn.dataset.brandId, 'rejected', btn.dataset.returnTo || ''); };
+      actions.appendChild(b1); actions.appendChild(b2);
+    } else {
+      var lbl = res.label || btn.dataset.label || '';
+      var rt = btn.dataset.returnTo || '';
+      var bL = document.createElement('button'); bL.className = 'chip detected';
+      bL.textContent = 'Use label: ' + lbl;
+      bL.onclick = function () { window.openBoxWith(eventId, btn.dataset.box || '', lbl, lbl, rt); close(); };
+      actions.appendChild(bL);
+      if (box && box.found) {
+        var arr = JSON.stringify([+box.x || 0, +box.y || 0, +box.w || 0, +box.h || 0]);
+        var bB = document.createElement('button'); bB.className = 'primary'; bB.textContent = 'Use box';
+        bB.onclick = function () { window.openBoxWith(eventId, arr, lbl, lbl, rt); close(); };
+        actions.appendChild(bB);
+      }
+    }
+    var bc = document.createElement('button'); bc.type = 'button'; bc.textContent = 'Close'; bc.onclick = close;
+    actions.appendChild(bc);
+    card.appendChild(actions);
+  }
+
+  window.genaiHelp = async function (btn) {
+    var model = sel ? sel.value : '';
+    card.innerHTML = '<div>Asking the model… this can take a few seconds.</div>';
+    panel.hidden = false;
+    var body = { kind: btn.dataset.kind, model: model };
+    if (btn.dataset.kind === 'brand') body.expected = btn.dataset.expected;
+    var res;
+    try {
+      var r = await fetch(BASE + '/api/genai_help/' + encodeURIComponent(btn.dataset.event), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      res = await r.json();
+    } catch (e) { res = { ok: false, error: String(e) }; }
+    if (!res || !res.ok) {
+      card.innerHTML = '<div class="msg">GenAI Help failed: ' + esc((res && res.error) || 'unknown') +
+        '</div><div class="actions"><button type="button" onclick="document.getElementById(\'genai-panel\').hidden=true">Close</button></div>';
+      return;
+    }
+    render(res, btn);
+  };
+})();
 </script>
 {% endblock %}

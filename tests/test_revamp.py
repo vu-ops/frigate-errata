@@ -11,6 +11,7 @@ from pathlib import Path
 from PIL import Image
 
 from errata import basemodels, trainer
+from errata import genai_help
 from errata.analyzer import Analyzer
 from errata.config import load_config, tracked_labels, attribute_labels
 from errata.controls import (
@@ -219,6 +220,90 @@ class TestBaseModels(Base):
         self.db.base_model_insert("custom", "upload", "pt", "/x/custom.pt")
         # keep_versions only touches published errata_*.onnx; base table intact
         self.assertIsNotNone(self.db.base_model_get("custom"))
+
+
+class TestSnapshotLimit(Base):
+    def _confirm(self, eid, label, start):
+        self.add_event(eid, label, description="a car")
+        self.db.set_status(eid, "confirmed")
+        with self.db.connect() as conn:
+            conn.execute("UPDATE events SET start_time=? WHERE id=?", (start, eid))
+
+    def test_per_label_cap(self):
+        for i in range(5):
+            self._confirm(f"c{i}", "car", i)
+        rows = self.db.prune_candidates({"car": 2}, 150)
+        self.assertEqual(sorted(r["id"] for r in rows), ["c0", "c1", "c2"])
+
+    def test_zero_keeps_forever(self):
+        for i in range(5):
+            self._confirm(f"c{i}", "car", i)
+        self.assertEqual(self.db.prune_candidates({"car": 0}, 150), [])
+
+    def test_default_cap(self):
+        for i in range(4):
+            self._confirm(f"c{i}", "car", i)
+        rows = self.db.prune_candidates({}, 2)
+        self.assertEqual(sorted(r["id"] for r in rows), ["c0", "c1"])
+
+    def test_controls_carry_keep(self):
+        set_control(self.cfg, self.db, "car", keep=42)
+        self.assertEqual(effective_for_label(self.cfg, self.db, "car")["keep"], 42)
+        set_control(self.cfg, self.db, "car", keep=None)
+        self.assertIsNone(effective_for_label(self.cfg, self.db, "car")["keep"])
+
+
+class TestGenAIHelp(Base):
+    def test_disabled_without_key(self):
+        self.cfg["review"]["genai_help"]["api_key"] = ""
+        self.assertFalse(genai_help.help_enabled(self.cfg))
+
+    def test_enabled_with_key(self):
+        self.cfg["review"]["genai_help"]["api_key"] = "test-key"
+        self.assertTrue(genai_help.help_enabled(self.cfg))
+
+    def test_analyze_parses_structured_response(self):
+        self.cfg["review"]["genai_help"]["api_key"] = "test-key"
+        path = self.add_event("e1", "cat", description="a cat")
+
+        class Resp:
+            status_code = 200
+
+            def json(self):
+                return {"choices": [{"message": {"content": json.dumps({
+                    "label": "cat", "description": "a gray cat", "confidence": 0.9,
+                    "box": {"found": True, "x": 0.1, "y": 0.2, "w": 0.3, "h": 0.4},
+                })}}]}
+
+        orig = genai_help.requests.post
+        genai_help.requests.post = lambda *a, **k: Resp()
+        try:
+            res = genai_help.analyze(self.cfg, path, "object", "cat", ["cat", "dog"], "m")
+        finally:
+            genai_help.requests.post = orig
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["label"], "cat")
+        self.assertTrue(res["box"]["found"])
+        self.assertAlmostEqual(res["box"]["w"], 0.3)
+
+
+class TestControlsPage(Base):
+    def test_page_renders_new_labels_and_limit(self):
+        from errata import scheduler as sched_mod
+        from errata import webapp as webapp_mod
+        from starlette.testclient import TestClient
+
+        sched_mod.Scheduler.start = lambda self: None
+        sched_mod.Scheduler.stop = lambda self: None
+        app = webapp_mod.create_app(self.cfg)
+        with TestClient(app) as c:
+            html = c.get("/errata/controls").text
+        self.assertEqual(html.count('class="bulk"'), 5)
+        self.assertIn("GenAI Description Search", html)
+        self.assertIn("Auto-approve", html)
+        self.assertIn("Include Auto Approved in Training", html)
+        self.assertIn("Snapshot Limit", html)
+        self.assertIn("Disabled (Ignore)", html)
 
 
 class TestResetDb(Base):

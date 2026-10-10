@@ -6,14 +6,15 @@
   Per-label controls. <strong>Collection</strong>: <em>Human + Machine Review</em>
   keeps everything, <em>Human Review Only</em> keeps only events needing a human
   decision, <em>Disabled (Ignore)</em> collects nothing and parks events in Ignored.
-  <strong>New Label Collection</strong> scans GenAI descriptions of new events for
-  this label's synonyms (across all detector labels) and surfaces matches for
+  <strong>GenAI Description Search</strong> scans GenAI descriptions of new events
+  for this label's synonyms (across all detector labels) and surfaces matches for
   review — use it to grow a new label. <strong>Include in Training</strong> decides
   whether a label is exported; disabled means collect-only. <strong>Auto-approve</strong>
   lets the analyzer confirm this label without a human. <strong>Include Auto Approved
   in Training</strong> allows coherent auto-approved events to be reused as training
-  labels. Use a column's dropdown to fill every row at once, then uncheck the rows
-  you don't want and Save.
+  labels. <strong>Snapshot Limit</strong> caps how many auto-approved/ignored
+  snapshots are kept per label (blank = default {{ global_keep }}, 0 = keep forever).
+  Use a column's header control to fill every row at once, then adjust rows and Save.
   {% if default_disabled %}<br><strong>Fresh-start mode is on</strong>: labels you add later default to disabled.{% endif %}
 </div>
 <form method="post" action="{{ base }}/controls">
@@ -28,8 +29,8 @@
         <option value="off">Disabled (Ignore)</option>
       </select>
     </th>
-    <th>New Label Collection
-      <select class="bulk" data-field="search" aria-label="apply new label collection to all">
+    <th>GenAI Description Search
+      <select class="bulk" data-field="search" aria-label="apply GenAI description search to all">
         <option value="">apply to all…</option>
         <option value="enable">enable all</option>
         <option value="disable">disable all</option>
@@ -56,6 +57,9 @@
         <option value="disable">disable all</option>
       </select>
     </th>
+    <th>Snapshot Limit
+      <input type="number" class="bulk-keep" min="0" placeholder="apply to all…" style="width: 8rem;" aria-label="apply snapshot limit to all">
+    </th>
   </tr>
   {% for label, c in controls.items() %}
   <tr>
@@ -75,6 +79,14 @@
     <td><input type="checkbox" name="include_training_{{ label }}" {% if c.include_training %}checked{% endif %}></td>
     <td><input type="checkbox" name="auto_confirm_{{ label }}" {% if c.auto_confirm %}checked{% endif %}></td>
     <td><input type="checkbox" name="pseudo_labels_{{ label }}" {% if c.pseudo_labels %}checked{% endif %}></td>
+    <td>
+      {% if label in attributes %}
+      <span class="meta">—</span>
+      {% else %}
+      <input type="number" min="0" name="keep_{{ label }}" value="{{ c.keep if c.keep is not none else '' }}"
+             placeholder="{{ global_keep }}" style="width: 7rem;">
+      {% endif %}
+    </td>
   </tr>
   {% endfor %}
 </table>
@@ -88,17 +100,21 @@ document.querySelectorAll('select.bulk').forEach(function (sel) {
     var field = sel.dataset.field;
     if (!sel.value) return;
     if (field === 'collect_mode') {
-      document.querySelectorAll('select[name^="collect_mode_"]').forEach(function (s) {
-        s.value = sel.value;
-      });
+      document.querySelectorAll('select[name^="collect_mode_"]').forEach(function (s) { s.value = sel.value; });
     } else {
       var on = sel.value === 'enable';
-      document.querySelectorAll('input[name^="' + field + '_"]').forEach(function (cb) {
-        cb.checked = on;
-      });
+      document.querySelectorAll('input[name^="' + field + '_"]').forEach(function (cb) { cb.checked = on; });
     }
     sel.value = '';
   });
 });
+var bulkKeep = document.querySelector('.bulk-keep');
+if (bulkKeep) {
+  bulkKeep.addEventListener('change', function () {
+    if (bulkKeep.value === '') return;
+    document.querySelectorAll('input[name^="keep_"]').forEach(function (inp) { inp.value = bulkKeep.value; });
+    bulkKeep.value = '';
+  });
+}
 </script>
 {% endblock %}

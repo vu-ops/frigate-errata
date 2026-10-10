@@ -76,8 +76,12 @@ Frigate API ──▶ harvester ──▶ SQLite ──▶ analyzer ──▶ re
 - **Candidate search** — flag a new label (e.g. coyote) and Errata scans GenAI
   descriptions for its synonyms, surfacing matches for review so you can grow the
   label before enabling training
-- **Per-label controls** — collect mode, search, train/collect-only,
-  auto-confirm, pseudo-labels, with bulk apply
+- **Per-label controls** — collect mode, GenAI Description Search, include in
+  training, auto-approve, include-auto-approved-in-training, and Snapshot Limit,
+  with a column-header bulk apply
+- **GenAI Help** — a second opinion on any review item via OpenRouter
+  (Gemini Flash / Qwen Flash): suggested label, description, and an optional
+  bounding box that pre-fills the box editor
 - Synonym-aware label/description mismatch detection (configurable per class)
 - Noise-burst, low-confidence, and oversized/merged-box detection
 - In-browser box editor + **training-crop preview** (the exact crop the model

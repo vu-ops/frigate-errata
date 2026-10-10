@@ -609,7 +609,7 @@ review:
   queue_limit: 200
   # Review-preview crop: show wider context than the training crop (~scale x
   # the object's larger side), rendered at preview_imgsz px.
-  preview_scale: 4.0
+  preview_scale: 1.33
   preview_imgsz: 640
   # Ignored events (incl. events of labels set to collect_mode: off) are kept
   # this many hours after they were ignored, then deleted with their snapshots.
@@ -617,6 +617,20 @@ review:
   keep_ignored_hours: 24
   # Events rendered per page in the review grid.
   page_size: 100
+  # "GenAI Help": send a snapshot to OpenRouter for a second opinion (label,
+  # description, optional bounding box). Auto-enabled when api_key is set.
+  genai_help:
+    enabled: true
+    api_key: "${OPENROUTER_API_KEY:-}"
+    base_url: "https://openrouter.ai/api/v1"
+    timeout: 60
+    max_image_px: 1024
+    default_model: "~google/gemini-flash-latest"
+    models:
+      - name: "Gemini Flash (latest)"
+        id: "~google/gemini-flash-latest"
+      - name: "Qwen Flash (latest)"
+        id: "qwen/qwen3.8-flash"
 notifications:
   enabled: false
   discord_webhook: ''

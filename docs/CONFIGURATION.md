@@ -156,20 +156,30 @@ analysis:
     window_hours: 1                # ...within this window flags "noise"
 
 review:
-  auto_keep_per_label: 500         # nightly prune: keep at most N most-recent
-                                   # auto-confirmed / auto-ignored snapshots per
-                                   # label. Human corrections and false positives
+  auto_keep_per_label: 500         # default snapshot cap per label (see the
+                                   # per-label "Snapshot Limit" on the Controls
+                                   # page). Human corrections and false positives
                                    # are ground truth and kept forever. 0
                                    # disables pruning entirely (keep everything).
                                    # Pending queue items are never pruned; ignored
                                    # events expire after keep_ignored_hours below.
   queue_limit: 200                 # max rows shown / exported per request
-  preview_scale: 4.0               # review preview: context multiplier vs the
-                                   # training crop (training crop is 1.35x)
+  preview_scale: 1.33              # review preview context vs the object's larger
+                                   # side (1.35 = the training crop)
   preview_imgsz: 640               # review preview render size (px)
   keep_ignored_hours: 24           # delete ignored events (+snapshots) this many
                                    # hours after they were ignored (0 = keep)
   page_size: 100                   # review grid items per page
+  genai_help:                      # "GenAI Help" button in the review queue
+    enabled: true                  # auto-disabled when api_key is empty
+    api_key: "${OPENROUTER_API_KEY:-}"   # or a literal key
+    base_url: "https://openrouter.ai/api/v1"
+    timeout: 60
+    max_image_px: 1024
+    default_model: "~google/gemini-flash-latest"
+    models:
+      - { name: "Gemini Flash (latest)", id: "~google/gemini-flash-latest" }
+      - { name: "Qwen Flash (latest)",   id: "qwen/qwen3.8-flash" }
 
 labels:
   track:                           # candidate labels in the review UI AND the
@@ -401,10 +411,11 @@ else to do. Otherwise create a wrapper unit or just use
 | `POST /errata/api/models/activate` | Body `{"model": "errata_<stamp>.onnx"}`. Backs up the Frigate config, patches the model path via the Frigate API, saves with `save_option=restart`, waits for Frigate to return |
 | `POST /errata/api/models/backups/<id>/revert` | Restore a previous Frigate config backup (a fresh backup of the current config is taken first), then restart Frigate |
 | `GET /errata/api/dataset/stats` | Summarize the on-disk YOLO dataset (human/pseudo images and objects, backgrounds, per-class train/val counts); the summary page renders this and warns when unexported corrections are not yet in the dataset |
-| `GET /errata/controls` / `POST /errata/controls` | Per-label controls. UI names: Collection (`all`=Human + Machine Review, `review_only`=Human Review Only, `off`=Disabled (Ignore)), New Label Collection (`search`), Include in Training (`include_training`), Auto-approve (`auto_confirm`), Include Auto Approved in Training (`pseudo_labels`). Each column header has a dropdown that fills every row client-side before saving |
+| `GET /errata/controls` / `POST /errata/controls` | Per-label controls. UI names: Collection (`all`=Human + Machine Review, `review_only`=Human Review Only, `off`=Disabled (Ignore)), GenAI Description Search (`search`), Include in Training (`include_training`), Auto-approve (`auto_confirm`), Include Auto Approved in Training (`pseudo_labels`), Snapshot Limit (`keep`, blank = global `review.auto_keep_per_label`, 0 = keep forever). Each column header fills every row client-side before saving |
 | `POST /errata/brand/{id}` / `POST /errata/brands/bulk` | Confirm/reject a brand review item (metadata only) |
 | `GET /errata/api/snapshots/{id}/crop.jpg` | The actual training crop for an event (matches the trainer's region crop) |
 | `GET /errata/api/snapshots/{id}/preview.jpg` | Wider-context crop used by the review grid (scale `review.preview_scale`, rendered at `review.preview_imgsz`) |
+| `POST /errata/api/genai_help/{id}` | Body `{"model": "<id>", "kind": "object"\|"brand", "expected": "<brand>"}`. Sends the clean snapshot to OpenRouter for a second opinion; returns `{label, description, confidence, box}`. 503 when disabled (no API key). Enabled automatically when `review.genai_help.api_key` is set |
 | `GET /errata/base-models` / `POST /errata/base-models/import-plus` / `POST /errata/base-models/upload` / `POST /errata/base-models/{name}/delete` | Base-model registry, Frigate+ import (one-time key), uploads |
 | `POST /errata/api/reset` | Body `{"confirm": "RESET", "return_model": "<optional published model>"}`. Wipes all learned/review data + files, disables all label controls (base models kept), optionally re-activates a kept model, then saves a final Frigate config backup |
 | `GET /errata/api/train/status` | Training job state (running / finished / error + detail); also shown on the Summary page |
@@ -585,7 +596,7 @@ manually (or cron it).
 | Task | Command |
 |---|---|
 | Immediate harvest+analyze | **"Fetch latest" button** in the UI header, or `curl -X POST https://.../errata/api/run-now` |
-| Snapshot cleanup | Automatic: the scheduler cycle (every `harvest.interval_minutes`) runs the prune at most once per 24h. Only auto-confirmed / auto-ignored events with no human correction are capped at `review.auto_keep_per_label` most-recent per label. Human corrections and false positives are ground truth and kept forever; pending events are never pruned; ignored events are deleted with their snapshots once older than `review.keep_ignored_hours` (default 24, every cycle), and events whose snapshot file is missing are deleted from the database. Force the marker to re-run: `docker exec errata python -c "from errata.db import Database; Database('/data/errata.db').kv_delete('last_prune_at')"` |
+| Snapshot cleanup | Automatic: the scheduler cycle (every `harvest.interval_minutes`) runs the prune at most once per 24h. Only auto-confirmed / auto-ignored events with no human correction are capped per label — at that label's **Snapshot Limit** (Controls page, default `review.auto_keep_per_label`; 0 = keep forever). Human corrections and false positives are ground truth and kept forever; pending events are never pruned; ignored events are deleted with their snapshots once older than `review.keep_ignored_hours` (default 24, every cycle), and events whose snapshot file is missing are deleted from the database. Force the marker to re-run: `docker exec errata python -c "from errata.db import Database; Database('/data/errata.db').kv_delete('last_prune_at')"` |
 | Trigger model rebuild | Train button (GPU/CPU per config), Mac kit, or `./deploy/train.sh`. Use `--export-only` to just rebuild the dataset and `--rebuild` to re-export every correction from scratch (wipes the dataset). The Discord notification at the correction threshold is a reminder, not a trigger |
 | Backfill further into history | set `harvest.lookback_hours` (e.g. 168 for a week), clear the watermark, trigger: `docker exec errata python -c "from errata.db import Database; Database('/data/errata.db').kv_delete('last_processed_at')"` then Fetch latest. Snapshots for old events may be expired by Frigate retention (`record` / snapshot retention) — those events are stored without images |
 | Reset processed-watermark (re-harvest 24h) | `docker exec errata python -c "from errata.db import Database; Database('/data/errata.db').kv_delete('last_processed_at')"` (or edit the `config` table) |

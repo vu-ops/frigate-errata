@@ -24,6 +24,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.background import BackgroundTask
 
 from . import basemodels
+from . import genai_help as genai
 from .controls import (
     CONTROLS_DEFAULT_DISABLED_KEY,
     effective_controls,
@@ -203,6 +204,11 @@ def create_app(config: dict) -> FastAPI:
             "reviewed_statuses": REVIEWED_STATUSES,
             "bulk_statuses": BULK_STATUSES,
             "ignored_view": (status or "pending") == "ignored",
+            "genai_help": {
+                "enabled": genai.help_enabled(config),
+                "models": genai.help_settings(config).get("models", []) or [],
+                "default_model": genai.help_settings(config).get("default_model", ""),
+            },
             "preview_scale": preview_scale,
             "preview_imgsz": preview_imgsz,
             "page": page,
@@ -540,6 +546,7 @@ def create_app(config: dict) -> FastAPI:
             "controls": controls,
             "labels": labels,
             "attributes": attribute_labels,
+            "global_keep": int(config["review"].get("auto_keep_per_label", 150)),
             "default_disabled": bool(db.kv_get(CONTROLS_DEFAULT_DISABLED_KEY) == "1"),
             "msg": msg,
         }
@@ -553,6 +560,13 @@ def create_app(config: dict) -> FastAPI:
             if f"present_{label}" not in form:
                 continue
             mode = str(form.get(f"collect_mode_{label}", "all"))
+            raw_keep = form.get(f"keep_{label}")
+            keep = None
+            if raw_keep not in (None, ""):
+                try:
+                    keep = max(0, int(str(raw_keep)))
+                except ValueError:
+                    raise HTTPException(status_code=400, detail=f"invalid snapshot limit for '{label}'")
             set_control(
                 config, db, label,
                 collect_mode=mode,
@@ -560,6 +574,7 @@ def create_app(config: dict) -> FastAPI:
                 include_training=form.get(f"include_training_{label}") is not None,
                 auto_confirm=form.get(f"auto_confirm_{label}") is not None,
                 pseudo_labels=form.get(f"pseudo_labels_{label}") is not None,
+                keep=keep,
             )
         return RedirectResponse(
             f"{base}/controls?msg={quote('Label controls saved.')}", status_code=303
@@ -753,6 +768,35 @@ def create_app(config: dict) -> FastAPI:
         except Exception:
             logger.exception("failed to build preview for %s", event_id)
             return FileResponse(path, media_type="image/jpeg", headers=no_cache)
+
+    @router.post("/api/genai_help/{event_id}")
+    async def genai_help_event(event_id: str, request: Request):
+        if not genai.help_enabled(config):
+            return JSONResponse(
+                {"ok": False, "error": "GenAI Help is disabled (no OpenRouter API key configured)"},
+                status_code=503,
+            )
+        body = await request.json()
+        kind = str(body.get("kind") or "object")
+        model = str(body.get("model") or "").strip()
+        configured = genai.help_settings(config).get("models", []) or []
+        allowed_ids = [m.get("id") for m in configured if isinstance(m, dict)]
+        if model and model not in allowed_ids:
+            return JSONResponse({"ok": False, "error": f"model '{model}' is not configured"}, status_code=400)
+        row = db.get_event(event_id)
+        if row is None:
+            return JSONResponse({"ok": False, "error": "event not found"}, status_code=404)
+        path = row["snapshot_path"]
+        if not path or not Path(path).is_file():
+            return JSONResponse({"ok": False, "error": "snapshot not available"}, status_code=404)
+        if kind == "brand":
+            expected = str(body.get("expected") or "").strip()
+            allowed = attribute_labels
+        else:
+            expected = row["label"]
+            allowed = labels
+        result = genai.analyze(config, path, kind, expected, allowed, model or None)
+        return JSONResponse(result, status_code=200 if result.get("ok") else 400)
 
     @router.get("/api/queue.json")
     def queue_json(status: str = "pending"):

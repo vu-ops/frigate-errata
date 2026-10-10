@@ -14,6 +14,7 @@ DISABLED_DEFAULTS = {
     "include_training": False,
     "auto_confirm": False,
     "pseudo_labels": False,
+    "keep": None,
 }
 
 _BOOL_FIELDS = ("search", "include_training", "auto_confirm", "pseudo_labels")
@@ -25,6 +26,11 @@ def _normalize(settings: dict) -> dict:
     out["collect_mode"] = out.get("collect_mode") if out.get("collect_mode") in _VALID_COLLECT else "all"
     for field in _BOOL_FIELDS:
         out[field] = bool(out.get(field))
+    keep = out.get("keep")
+    try:
+        out["keep"] = int(keep) if keep not in (None, "") else None
+    except (TypeError, ValueError):
+        out["keep"] = None
     return out
 
 
@@ -46,7 +52,7 @@ def effective_controls(config: dict, db, labels: list[str]) -> dict[str, dict]:
         row = stored.get(label) or {}
         merged = {**base}
         for key, value in row.items():
-            if key in ("collect_mode",) or key in _BOOL_FIELDS:
+            if key in ("collect_mode", "keep") or key in _BOOL_FIELDS:
                 merged[key] = value
         result[label] = _normalize(merged)
     return result
@@ -59,7 +65,7 @@ def effective_for_label(config: dict, db, label: str) -> dict:
 def set_control(config: dict, db, label: str, **fields) -> dict:
     """Update one or more control fields, preserving the rest of the effective set."""
     current = effective_for_label(config, db, label)
-    current.update({k: v for k, v in fields.items() if k in ("collect_mode",) or k in _BOOL_FIELDS})
+    current.update({k: v for k, v in fields.items() if k in ("collect_mode", "keep") or k in _BOOL_FIELDS})
     db.set_label_settings(
         label,
         collect_mode=current["collect_mode"],
@@ -67,6 +73,7 @@ def set_control(config: dict, db, label: str, **fields) -> dict:
         include_training=current["include_training"],
         auto_confirm=current["auto_confirm"],
         pseudo_labels=current["pseudo_labels"],
+        keep=current.get("keep"),
     )
     return current
 
@@ -81,5 +88,6 @@ def reset_all_disabled(config: dict, db, labels: list[str]) -> None:
             include_training=False,
             auto_confirm=False,
             pseudo_labels=False,
+            keep=None,
         )
     db.kv_set(CONTROLS_DEFAULT_DISABLED_KEY, "1")

@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS label_settings (
     include_training INTEGER NOT NULL DEFAULT 1,
     auto_confirm INTEGER NOT NULL DEFAULT 1,
     pseudo_labels INTEGER NOT NULL DEFAULT 1,
+    keep INTEGER,
     updated_at REAL
 );
 
@@ -122,6 +123,9 @@ class Database:
             conn.execute("ALTER TABLE events ADD COLUMN sub_label TEXT NOT NULL DEFAULT ''")
         # Consolidate skipped into ignored (single dismissed status).
         conn.execute("UPDATE events SET status='ignored' WHERE status='skipped'")
+        ls_cols = {row[1] for row in conn.execute("PRAGMA table_info(label_settings)").fetchall()}
+        if ls_cols and "keep" not in ls_cols:
+            conn.execute("ALTER TABLE label_settings ADD COLUMN keep INTEGER")
 
     @contextmanager
     def connect(self):
@@ -573,16 +577,41 @@ class Database:
             )
         return [row["file_path"] for row in stale]
 
-    def prune_candidates(self, keep_per_label: int) -> list[sqlite3.Row]:
+    def prune_candidates(
+        self,
+        keep_by_label: dict[str, int] | None = None,
+        default_keep: int = 0,
+    ) -> list[sqlite3.Row]:
         """Events whose snapshot may be deleted by the nightly retention pass.
 
         Only auto-confirmed / auto-ignored events with *no* human correction are
-        capped (newest `keep_per_label` per label). Human corrections and false
-        positives are ground truth and are never pruned.
+        capped (newest N per label). Each label keeps ``keep_by_label[label]`` if
+        set, else ``default_keep``. A keep of 0 means keep forever for that
+        label. Human corrections and false positives are never pruned.
         """
+        keep_by_label = keep_by_label or {}
+        forever = 1_000_000_000
+
+        def cap(value) -> int:
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                return 0
+            return value if value > 0 else forever
+
+        whens = "".join(" WHEN ? THEN ?" for _ in keep_by_label)
+        params: list = []
+        for label, value in keep_by_label.items():
+            params.extend([label, cap(value)])
+        params.append(cap(default_keep))
+        if whens:
+            cap_expr = f"(CASE r.bucket_label{whens} ELSE ? END)"
+        else:
+            cap_expr = "?"
+            params = [cap(default_keep)]
         with self.connect() as conn:
             return conn.execute(
-                """
+                f"""
                 WITH pool AS (
                     SELECT e.id, e.label AS bucket_label, e.snapshot_path, e.start_time
                     FROM events e
@@ -599,9 +628,9 @@ class Database:
                 SELECT r.id, r.bucket, r.bucket_label, p.snapshot_path, r.rn
                 FROM ranked r
                 JOIN events p ON p.id = r.id
-                WHERE r.rn > ?
+                WHERE r.rn > {cap_expr}
                 """,
-                (keep_per_label,),
+                tuple(params),
             ).fetchall()
 
     # ---- brand review items -------------------------------------------------
@@ -720,7 +749,7 @@ class Database:
         return dict(row) if row else None
 
     def set_label_settings(self, label: str, **fields) -> None:
-        allowed = ("collect_mode", "search", "include_training", "auto_confirm", "pseudo_labels")
+        allowed = ("collect_mode", "search", "include_training", "auto_confirm", "pseudo_labels", "keep")
         row = self.label_settings(label) or {"label": label}
         values = {k: row.get(k) for k in allowed}
         for key, value in fields.items():
@@ -728,18 +757,21 @@ class Database:
                 if isinstance(value, bool):
                     value = int(value)
                 values[key] = value
+        keep = values.get("keep")
+        keep = None if keep in (None, "") else int(keep)
         with self.connect() as conn:
             conn.execute(
                 """
                 INSERT INTO label_settings
-                    (label, collect_mode, search, include_training, auto_confirm, pseudo_labels, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (label, collect_mode, search, include_training, auto_confirm, pseudo_labels, keep, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(label) DO UPDATE SET
                     collect_mode = excluded.collect_mode,
                     search = excluded.search,
                     include_training = excluded.include_training,
                     auto_confirm = excluded.auto_confirm,
                     pseudo_labels = excluded.pseudo_labels,
+                    keep = excluded.keep,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -749,6 +781,7 @@ class Database:
                     int(values.get("include_training") if values.get("include_training") is not None else 1),
                     int(values.get("auto_confirm") if values.get("auto_confirm") is not None else 1),
                     int(values.get("pseudo_labels") if values.get("pseudo_labels") is not None else 1),
+                    keep,
                     time.time(),
                 ),
             )
