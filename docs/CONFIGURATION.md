@@ -161,9 +161,15 @@ review:
                                    # label. Human corrections and false positives
                                    # are ground truth and kept forever. 0
                                    # disables pruning entirely (keep everything).
-                                   # Pending queue items and skipped events are
-                                   # never pruned.
+                                   # Pending queue items are never pruned; ignored
+                                   # events expire after keep_ignored_hours below.
   queue_limit: 200                 # max rows shown / exported per request
+  preview_scale: 4.0               # review preview: context multiplier vs the
+                                   # training crop (training crop is 1.35x)
+  preview_imgsz: 640               # review preview render size (px)
+  keep_ignored_hours: 24           # delete ignored events (+snapshots) this many
+                                   # hours after they were ignored (0 = keep)
+  page_size: 100                   # review grid items per page
 
 labels:
   track:                           # candidate labels in the review UI AND the
@@ -242,11 +248,11 @@ For every unprocessed event (newest first):
 
 1. `confidence < min_confidence` → status `ignored` (out of scope).
 2. Degenerate detector box (fails `is_plausible_box`: a full-width sliver
-   anchored on the frame edge) → status `skipped` when
+   anchored on the frame edge) → status `ignored` when
    `auto_skip_implausible_boxes` is on (the default), so it never reaches the
    queue or the dataset. With the option off it is flagged as `noise` instead.
    `python -m errata.trainer --check-boxes` reports these, and
-   `--skip-degenerate-boxes` retroactively skips any already queued.
+   `--skip-degenerate-boxes` retroactively marks any already queued as ignored.
 2. No snapshot on disk (never downloaded, or removed by the nightly retention
    prune once it aged past `review.auto_keep_per_label`) → the event and any of
    its corrections are **deleted from the database**. An image-less event can't
@@ -376,9 +382,11 @@ else to do. Otherwise create a wrapper unit or just use
 
 | Route | Purpose |
 |---|---|
-| `GET /errata/` | Review queue. The `View` dropdown selects the status to show (`pending`, `corrected`, `false_positive`, `confirmed`, `ignored`, `skipped`, `all`); camera/label/reason filters narrow the list. `Set status` + Apply is the bulk action, see `POST /errata/bulk` |
-| `POST /errata/review/{id}` | Actions: `confirm` (+ `label`) records the selected label as a correction, `false_positive` marks noise, `skip` sets the event aside (status `skipped`, never used for training), `reset` undoes a review (drops the correction and returns the event to `pending`). An optional `box` (JSON `[x,y,w,h]`, frame-relative, clamped/validated) overrides the stored detection box for `confirm`/`false_positive` — this is what the card's **Edit box** editor posts. An optional `return_to` querystring keeps the current filters/View after the action |
-| `POST /errata/bulk` | Bulk-apply a target status (`skipped`, `confirmed`, `false_positive`, `ignored`) to every pending event matching the `camera` / `label` / `reason` filters |
+| `GET /errata/` | Review queue. Grid of wider-context crops with multi-select (checkbox, shift-click range, drag marquee). The `View` dropdown selects the status (`pending`, `corrected`, `false_positive`, `confirmed`, `ignored`, `all`); camera/label/reason filters narrow the list; 100 items per page with prev/next. `Set status` + Apply acts on **all matching** events |
+| `POST /errata/review/{id}` | Per-item actions: `confirm` (+ `label`), `false_positive`, `ignore` (status `ignored`, never trained), `reset` (undo → back to `pending`). Optional `box` (JSON `[x,y,w,h]`) overrides the stored box. `return_to` preserves filters |
+| `POST /errata/bulk/selected` | Apply an action to **selected** events: repeated `event_ids` + `action` in `confirm` / `relabel` (+ `label`) / `false_positive` / `ignore` / `reset` |
+| `POST /errata/brand/{id}`, `POST /errata/brands/bulk/selected` | Confirm/reject/undo a brand item, individually or for selected `brand_ids` |
+| `POST /errata/bulk` | Bulk-apply a target status (`confirmed`, `false_positive`, `ignored`) to every pending event matching the `camera` / `label` / `reason` filters |
 | `GET /errata/summary` | Stats: statuses, corrections by camera/label, retrain progress, model versions, and the on-disk dataset the trainer consumes (human vs pseudo labels, backgrounds, per-class counts) |
 | `GET /errata/synonyms` | View/edit label synonyms (saved as a DB override, applied on next analyzer run) |
 | `POST /errata/synonyms` | Save the synonym form (comma-separated per label) |
@@ -396,6 +404,7 @@ else to do. Otherwise create a wrapper unit or just use
 | `GET /errata/controls` / `POST /errata/controls` / `POST /errata/controls/bulk` | Per-label controls: collect mode (`all`/`review_only`/`off`), search, include_training, auto_confirm, pseudo_labels; bulk-apply per column |
 | `POST /errata/brand/{id}` / `POST /errata/brands/bulk` | Confirm/reject a brand review item (metadata only) |
 | `GET /errata/api/snapshots/{id}/crop.jpg` | The actual training crop for an event (matches the trainer's region crop) |
+| `GET /errata/api/snapshots/{id}/preview.jpg` | Wider-context crop used by the review grid (scale `review.preview_scale`, rendered at `review.preview_imgsz`) |
 | `GET /errata/base-models` / `POST /errata/base-models/import-plus` / `POST /errata/base-models/upload` / `POST /errata/base-models/{name}/delete` | Base-model registry, Frigate+ import (one-time key), uploads |
 | `POST /errata/api/reset` | Body `{"confirm": "RESET", "return_model": "<optional published model>"}`. Wipes all learned/review data + files, disables all label controls (base models kept), optionally re-activates a kept model, then saves a final Frigate config backup |
 | `GET /errata/api/train/status` | Training job state (running / finished / error + detail); also shown on the Summary page |
@@ -576,7 +585,7 @@ manually (or cron it).
 | Task | Command |
 |---|---|
 | Immediate harvest+analyze | **"Fetch latest" button** in the UI header, or `curl -X POST https://.../errata/api/run-now` |
-| Snapshot cleanup | Automatic: the scheduler cycle (every `harvest.interval_minutes`) runs the prune at most once per 24h. Only auto-confirmed / auto-ignored events with no human correction are capped at `review.auto_keep_per_label` most-recent per label. Human corrections and false positives are ground truth and kept forever; pending/skipped events are never pruned, and events whose snapshot file is missing are deleted from the database. Force the marker to re-run: `docker exec errata python -c "from errata.db import Database; Database('/data/errata.db').kv_delete('last_prune_at')"` |
+| Snapshot cleanup | Automatic: the scheduler cycle (every `harvest.interval_minutes`) runs the prune at most once per 24h. Only auto-confirmed / auto-ignored events with no human correction are capped at `review.auto_keep_per_label` most-recent per label. Human corrections and false positives are ground truth and kept forever; pending events are never pruned; ignored events are deleted with their snapshots once older than `review.keep_ignored_hours` (default 24, every cycle), and events whose snapshot file is missing are deleted from the database. Force the marker to re-run: `docker exec errata python -c "from errata.db import Database; Database('/data/errata.db').kv_delete('last_prune_at')"` |
 | Trigger model rebuild | Train button (GPU/CPU per config), Mac kit, or `./deploy/train.sh`. Use `--export-only` to just rebuild the dataset and `--rebuild` to re-export every correction from scratch (wipes the dataset). The Discord notification at the correction threshold is a reminder, not a trigger |
 | Backfill further into history | set `harvest.lookback_hours` (e.g. 168 for a week), clear the watermark, trigger: `docker exec errata python -c "from errata.db import Database; Database('/data/errata.db').kv_delete('last_processed_at')"` then Fetch latest. Snapshots for old events may be expired by Frigate retention (`record` / snapshot retention) — those events are stored without images |
 | Reset processed-watermark (re-harvest 24h) | `docker exec errata python -c "from errata.db import Database; Database('/data/errata.db').kv_delete('last_processed_at')"` (or edit the `config` table) |
@@ -596,6 +605,6 @@ manually (or cron it).
 | 401 in logs | Set `ERRATA_FRIGATE_USER` / `ERRATA_FRIGATE_PASSWORD` in `.env` and restart |
 | 502 from nginx | errata container down or `server.listen_port` mismatch; the resolver needs both containers on the same compose network |
 | UI assets / links broken behind proxy | `server.base_path` must equal the nginx location prefix (default `/errata`) |
-| Snapshots missing for old events | Auto-confirmed/auto-ignored snapshots with no human correction are pruned nightly to the most recent `review.auto_keep_per_label` per label (0 = never prune); human corrections and false-positive snapshots are kept forever, as are pending/skipped events. Events whose snapshot file is missing are deleted from the database |
+| Snapshots missing for old events | Auto-confirmed/auto-ignored snapshots with no human correction are pruned nightly to the most recent `review.auto_keep_per_label` per label (0 = never prune); human corrections and false-positive snapshots are kept forever; ignored events expire after `review.keep_ignored_hours`. Events whose snapshot file is missing are deleted from the database |
 | Model rejected by Frigate | Confirm `labelmap_path` exists and class count matches; check detector logs; ONNX export imgsz must match `model.width/height` |
 | Harvest rescans same window | `last_processed_at` only advances on successful runs; lookback window covers stragglers |

@@ -211,7 +211,9 @@ PyTorch falls back to CPU at runtime.
 ## Training and deploying a model
 
 1. Confirm some events in the queue (pick the right label, mark false positives,
-   or skip). Corrections accumulate in `data/errata.db`.
+   or ignore). The grid supports multi-select (checkbox, shift-click, drag) with
+   a bulk toolbar — confirm, mark false positives, ignore, or change the label.
+   Corrections accumulate in `data/errata.db`.
 2. Train — pick one:
    - **Train button** (UI header): runs inside the Errata container on the
      configured device.
@@ -269,11 +271,12 @@ PyTorch falls back to CPU at runtime.
   `python -m errata.trainer --refresh-snapshots` then `--rebuild`.
 - The review UI draws the detection box on the fly when serving snapshots; the
   on-disk image stays clean, so training never sees the overlay.
-- Retention (`nightly prune`, once per 24h) caps auto-confirmed / auto-ignored
-  events at `review.auto_keep_per_label` most-recent per label. Human
-  corrections and false positives are ground truth and kept forever; pending and
-  skipped events are never pruned. Events whose snapshot file is missing are
-  deleted from the database.
+- Retention caps auto-confirmed snapshots at `review.auto_keep_per_label`
+  most-recent per label (nightly). Human corrections and false positives are
+  ground truth and kept forever; pending events are never pruned. **Ignored**
+  events (including events of labels set to `collect_mode: off`) are deleted
+  with their snapshots once older than `review.keep_ignored_hours` (default 24).
+  Events whose snapshot file is missing are deleted from the database.
 - `config.yaml` changes require `docker compose restart errata`.
 - Errata's mismatch and auto-confirm rules read Frigate GenAI event
   descriptions. GenAI is required for description-based auto-confirm

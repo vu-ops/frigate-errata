@@ -78,7 +78,6 @@ class Analyzer:
             "oversized": 0,
             "ignored": 0,
             "confirmed": 0,
-            "skipped": 0,
             "dropped_review_only": 0,
         }
         now = time.time()
@@ -101,7 +100,7 @@ class Analyzer:
         ctl = controls.get(row["label"], {}) or {}
         if ctl.get("collect_mode") != "review_only":
             return False
-        if outcome not in ("confirmed", "ignored", "skipped"):
+        if outcome not in ("confirmed", "ignored"):
             return False
         path = row["snapshot_path"]
         if path:
@@ -157,15 +156,21 @@ class Analyzer:
         ctl = controls.get(label, {}) or {}
         auto_confirm = bool(ctl.get("auto_confirm", True))
 
+        # collect_mode "off": collect nothing for this label. Never flag; park
+        # the event in ignored (it will be purged after review.keep_ignored_hours).
+        if ctl.get("collect_mode") == "off":
+            self.db.set_status(row["id"], "ignored", reviewed=True)
+            return "ignored"
+
         if confidence is not None and confidence < self.min_confidence:
-            self.db.set_status(row["id"], "ignored")
+            self.db.set_status(row["id"], "ignored", reviewed=True)
             return "ignored"
 
         # Degenerate detector boxes are artifacts, not real objects.
         if row["box"] and not is_plausible_box(row["box"]):
             if self.auto_skip_implausible:
-                self.db.set_status(row["id"], "skipped", reviewed=True)
-                return "skipped"
+                self.db.set_status(row["id"], "ignored", reviewed=True)
+                return "ignored"
             self.db.set_flag(row["id"], "noise", PRIORITY_NOISE, "")
             return "noise"
 
@@ -217,9 +222,9 @@ class Analyzer:
             if auto_confirm:
                 self.db.set_status(row["id"], "confirmed")
                 return "confirmed"
-            # Auto-confirm disabled for this label: clean events go to skipped.
-            self.db.set_status(row["id"], "skipped", reviewed=True)
-            return "skipped"
+            # Auto-confirm disabled for this label: clean events go to ignored.
+            self.db.set_status(row["id"], "ignored", reviewed=True)
+            return "ignored"
 
         self.db.set_flag(row["id"], reason, priority, suggestion)
         return reason

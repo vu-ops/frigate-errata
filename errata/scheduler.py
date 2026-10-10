@@ -71,6 +71,10 @@ class Scheduler:
         except Exception:
             logger.exception("retention cleanup failed")
         try:
+            stats["purged_ignored"] = self._purge_ignored()
+        except Exception:
+            logger.exception("ignored purge failed")
+        try:
             self._maybe_notify()
         except Exception:
             logger.exception("notification failed")
@@ -111,6 +115,25 @@ class Scheduler:
             for (bucket, label), n in sorted(by_bucket.items()):
                 logger.info("prune bucket %s/%s: removed %d", bucket, label, n)
         return len(candidates)
+
+    def _purge_ignored(self) -> int:
+        """Delete ignored events (and snapshots) once they age past keep_ignored_hours."""
+        hours = float(self.cfg["review"].get("keep_ignored_hours", 24) or 0)
+        if hours <= 0:
+            return 0
+        rows = self.db.ignored_for_purge(hours)
+        if not rows:
+            return 0
+        for row in rows:
+            path = row["snapshot_path"]
+            if path:
+                try:
+                    Path(path).unlink(missing_ok=True)
+                except OSError:
+                    logger.exception("failed to delete ignored snapshot %s", path)
+        self.db.delete_events([row["id"] for row in rows])
+        logger.info("purged %d ignored event(s) older than %.0fh", len(rows), hours)
+        return len(rows)
 
     def _maybe_notify(self) -> None:
         notifications = self.cfg["notifications"]

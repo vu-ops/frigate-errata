@@ -607,6 +607,16 @@ analysis:
 review:
   auto_keep_per_label: 150
   queue_limit: 200
+  # Review-preview crop: show wider context than the training crop (~scale x
+  # the object's larger side), rendered at preview_imgsz px.
+  preview_scale: 4.0
+  preview_imgsz: 640
+  # Ignored events (incl. events of labels set to collect_mode: off) are kept
+  # this many hours after they were ignored, then deleted with their snapshots.
+  # 0 keeps them forever.
+  keep_ignored_hours: 24
+  # Events rendered per page in the review grid.
+  page_size: 100
 notifications:
   enabled: false
   discord_webhook: ''

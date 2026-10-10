@@ -44,7 +44,6 @@ REVIEW_STATUSES = [
     "flagged",
     "corrected",
     "false_positive",
-    "skipped",
     "confirmed",
     "ignored",
     "all",
@@ -52,7 +51,7 @@ REVIEW_STATUSES = [
 
 FLAG_REASONS = ["mismatch", "candidate", "low_confidence", "noise", "oversized"]
 
-REVIEWED_STATUSES = {"corrected", "false_positive", "confirmed", "ignored", "skipped"}
+REVIEWED_STATUSES = {"corrected", "false_positive", "confirmed", "ignored"}
 
 VIEW_STATUSES = [
     ("pending", "Pending review"),
@@ -60,16 +59,14 @@ VIEW_STATUSES = [
     ("false_positive", "False positive"),
     ("confirmed", "Auto-confirmed"),
     ("ignored", "Ignored"),
-    ("skipped", "Skipped"),
     ("all", "All events"),
 ]
 
 BRAND_STATUSES = [("pending", "Pending"), ("confirmed", "Confirmed"),
                   ("rejected", "Rejected"), ("all", "All")]
 
-BULK_STATUSES = ["skipped", "confirmed", "false_positive", "ignored"]
+BULK_STATUSES = ["confirmed", "false_positive", "ignored"]
 BULK_STATUS_ACTIONS = {
-    "skipped": "skip",
     "confirmed": "confirm",
     "false_positive": "false_positive",
     "ignored": "ignore",
@@ -113,6 +110,9 @@ def create_app(config: dict) -> FastAPI:
     labels = list(config["labels"]["track"])
     attribute_labels = list(config["labels"].get("attributes", []))
     queue_limit = int(config["review"]["queue_limit"])
+    page_size = int(config["review"].get("page_size", 100) or 100)
+    preview_scale = float(config["review"].get("preview_scale", 4.0) or 4.0)
+    preview_imgsz = int(config["review"].get("preview_imgsz", 640) or 640)
     imgsz = int(config["training"].get("imgsz", 320))
 
     basemodels.seed_builtin_models(db)
@@ -161,24 +161,36 @@ def create_app(config: dict) -> FastAPI:
         brand: str = "",
         brand_status: str = "pending",
         brand_camera: str = "",
+        page: int = 1,
         msg: str = "",
     ):
         purged = db.purge_missing_snapshots()
         if purged and not msg:
             msg = f"Removed {purged} event(s) whose snapshot file no longer exists."
+        page = max(1, int(page or 1))
         rows = db.queue(
             status=status or "pending",
             camera=camera or None,
             label=label or None,
             reason=reason or None,
             corrected=corrected or None,
-            limit=queue_limit,
+            limit=page_size,
+            offset=(page - 1) * page_size,
         )
+        total = db.queue_total(
+            status=status or "pending",
+            camera=camera or None,
+            label=label or None,
+            reason=reason or None,
+            corrected=corrected or None,
+        )
+        pages = max(1, (total + page_size - 1) // page_size)
+        page = min(page, pages)
         brand_rows = db.brand_queue(
             status=brand_status or "pending",
             brand=brand or None,
             camera=brand_camera or None,
-            limit=queue_limit,
+            limit=page_size,
         )
         ctx = {
             "rows": rows,
@@ -194,6 +206,13 @@ def create_app(config: dict) -> FastAPI:
             "brand_statuses": BRAND_STATUSES,
             "reviewed_statuses": REVIEWED_STATUSES,
             "bulk_statuses": BULK_STATUSES,
+            "ignored_view": (status or "pending") == "ignored",
+            "preview_scale": preview_scale,
+            "preview_imgsz": preview_imgsz,
+            "page": page,
+            "pages": pages,
+            "total": total,
+            "page_size": page_size,
             "filters": {
                 "camera": camera,
                 "label": label,
@@ -348,10 +367,6 @@ def create_app(config: dict) -> FastAPI:
             )
             db.set_status(event_id, "false_positive", reviewed=True)
             return f"{event_id} marked as false positive"
-        if action == "skip":
-            db.delete_corrections_for_event(event_id)
-            db.set_status(event_id, "skipped", reviewed=True)
-            return f"{event_id} skipped (excluded from training)"
         if action == "ignore":
             db.delete_corrections_for_event(event_id)
             db.set_status(event_id, "ignored", reviewed=True)
@@ -425,6 +440,37 @@ def create_app(config: dict) -> FastAPI:
         params["msg"] = f"Bulk set '{status}' on {len(rows)} object event(s)"
         return RedirectResponse(f"{base}/?{urlencode(params)}", status_code=303)
 
+    @router.post("/bulk/selected")
+    def bulk_selected(
+        event_ids: list[str] = Form(...),
+        action: str = Form(...),
+        label: str = Form(""),
+        return_to: str = Form(""),
+    ):
+        if action not in ("confirm", "relabel", "false_positive", "ignore", "reset"):
+            raise HTTPException(status_code=400, detail=f"unknown action '{action}'")
+        if action == "relabel" and not label.strip():
+            raise HTTPException(status_code=400, detail="pick a label to apply")
+        params = dict(parse_qsl(return_to, keep_blank_values=True))
+        params.pop("msg", None)
+        count = 0
+        for event_id in event_ids:
+            row = db.get_event(event_id)
+            if row is None:
+                continue
+            if action == "confirm":
+                apply_review(row, "confirm", row["label"])
+            elif action == "relabel":
+                apply_review(row, "confirm", label.strip())
+            else:
+                apply_review(row, action)
+            count += 1
+        verb = {"confirm": "confirmed as detected", "relabel": f"relabelled to {label}",
+                "false_positive": "marked false positive",
+                "ignore": "ignored", "reset": "restored"}[action]
+        params["msg"] = f"{count} selected event(s) {verb}"
+        return RedirectResponse(f"{base}/?{urlencode(params)}", status_code=303)
+
     # ---- brand review -------------------------------------------------------
 
     @router.post("/brand/{brand_id}")
@@ -468,6 +514,24 @@ def create_app(config: dict) -> FastAPI:
         params = dict(parse_qsl(return_to, keep_blank_values=True))
         params.pop("msg", None)
         params["msg"] = f"Bulk {action} on {len(rows)} brand item(s)"
+        return RedirectResponse(f"{base}/?{urlencode(params)}", status_code=303)
+
+    @router.post("/brands/bulk/selected")
+    def brand_bulk_selected(
+        brand_ids: list[int] = Form(...),
+        action: str = Form(...),
+        return_to: str = Form(""),
+    ):
+        if action not in ("confirm", "rejected", "reset"):
+            raise HTTPException(status_code=400, detail="bad brand bulk action")
+        target = {"confirm": "confirmed", "rejected": "rejected", "reset": "pending"}[action]
+        count = 0
+        for brand_id in brand_ids:
+            db.set_brand_status(int(brand_id), target)
+            count += 1
+        params = dict(parse_qsl(return_to, keep_blank_values=True))
+        params.pop("msg", None)
+        params["msg"] = f"{count} selected brand item(s) updated"
         return RedirectResponse(f"{base}/?{urlencode(params)}", status_code=303)
 
     # ---- per-label controls -------------------------------------------------
@@ -671,6 +735,44 @@ def create_app(config: dict) -> FastAPI:
             return Response(content=buf.getvalue(), media_type="image/jpeg", headers=no_cache)
         except Exception:
             logger.exception("failed to build crop preview for %s", event_id)
+            return FileResponse(path, media_type="image/jpeg", headers=no_cache)
+
+    @router.get("/api/snapshots/{event_id}/preview.jpg")
+    def snapshot_preview(event_id: str):
+        """Wider-context preview around the object (training crop is tighter)."""
+        from .imaging import region_crop_pil
+
+        path = _snapshot_or_404(event_id)
+        row = db.get_event(event_id)
+        box, label = _effective_box(row)
+        no_cache = {"Cache-Control": "no-cache, no-store, must-revalidate"}
+        try:
+            from PIL import Image, ImageDraw
+
+            img = Image.open(path).convert("RGB")
+            parsed = None
+            if box:
+                try:
+                    parsed = tuple(float(v) for v in json.loads(box))
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    parsed = None
+            crop, box_c = region_crop_pil(img, parsed, preview_imgsz, scale=preview_scale)
+            if box_c:
+                w_px, h_px = crop.size
+                x, y, w, h = box_c
+                draw = ImageDraw.Draw(crop)
+                draw.rectangle(
+                    [int(x * w_px), int(y * h_px), int((x + w) * w_px), int((y + h) * h_px)],
+                    outline=(0, 220, 255), width=2,
+                )
+                if label:
+                    draw.rectangle([2, 2, 8 * len(label) + 8, 15], fill=(0, 0, 0))
+                    draw.text((4, 3), label, fill=(0, 220, 255))
+            buf = io.BytesIO()
+            crop.save(buf, format="JPEG", quality=85)
+            return Response(content=buf.getvalue(), media_type="image/jpeg", headers=no_cache)
+        except Exception:
+            logger.exception("failed to build preview for %s", event_id)
             return FileResponse(path, media_type="image/jpeg", headers=no_cache)
 
     @router.get("/api/queue.json")

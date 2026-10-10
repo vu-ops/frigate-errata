@@ -108,12 +108,44 @@ class TestAnalyzer(Base):
         self.add_event("e2", "car", description="a car")
         set_control(self.cfg, self.db, "car", auto_confirm=False)
         Analyzer(self.cfg, self.db).run()
-        self.assertEqual(self.db.get_event("e2")["status"], "skipped")
+        self.assertEqual(self.db.get_event("e2")["status"], "ignored")
 
     def test_auto_confirm_on_confirms_clean(self):
         self.add_event("e3", "car", description="a car")
         Analyzer(self.cfg, self.db).run()
         self.assertEqual(self.db.get_event("e3")["status"], "confirmed")
+
+
+class TestCollectMode(Base):
+    def test_off_routes_to_ignored(self):
+        self.add_event("e1", "car", description="a car")
+        set_control(self.cfg, self.db, "car", collect_mode="off")
+        Analyzer(self.cfg, self.db).run()
+        row = self.db.get_event("e1")
+        self.assertEqual(row["status"], "ignored")
+        self.assertIsNotNone(row["reviewed_at"])
+
+    def test_ignored_purge_query_and_delete(self):
+        self.add_event("old", "car", description="a car")
+        self.add_event("new", "car", description="a car")
+        with self.db.connect() as conn:
+            conn.execute("UPDATE events SET status='ignored', reviewed_at=0 WHERE id='old'")
+        rows = self.db.ignored_for_purge(24)
+        self.assertEqual([r["id"] for r in rows], ["old"])
+        self.db.delete_events(["old"])
+        self.assertIsNone(self.db.get_event("old"))
+        self.assertIsNotNone(self.db.get_event("new"))
+
+    def test_queue_offset_and_total(self):
+        for i in range(5):
+            self.add_event(f"q{i}", "car", description="a car")
+        total = self.db.queue_total(status="all")
+        self.assertEqual(total, 5)
+        page1 = self.db.queue(status="all", limit=2, offset=0)
+        page2 = self.db.queue(status="all", limit=2, offset=2)
+        self.assertEqual(len(page1), 2)
+        self.assertEqual(len(page2), 2)
+        self.assertNotEqual({r["id"] for r in page1}, {r["id"] for r in page2})
 
 
 class TestExport(Base):

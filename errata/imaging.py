@@ -56,15 +56,17 @@ def region_crop_cv2(img, box, imgsz: int, min_side: int = MIN_SIDE):
     return crop, box_c
 
 
-def region_crop_pil(img, box, imgsz: int, min_side: int = MIN_SIDE):
+def region_crop_pil(img, box, imgsz: int, min_side: int = MIN_SIDE, scale: float = CROP_SCALE):
     """Crop+resize with PIL (used by the web preview, no cv2 dependency).
 
     Geometry matches region_crop_cv2; only the interpolation library differs.
+    ``scale`` controls how much context is included (1.35 = training crop, a
+    larger value shows more surroundings for the review preview).
     """
     from PIL import Image
 
     fw, fh = img.size
-    x0, y0, side, box_c = region_geometry(box, fw, fh, min_side=min_side)
+    x0, y0, side, box_c = region_geometry(box, fw, fh, min_side=min_side, scale=scale)
     canvas = Image.new("RGB", (side, side), (0, 0, 0))
     sx0, sy0 = max(0, x0), max(0, y0)
     dx0, dy0 = sx0 - x0, sy0 - y0

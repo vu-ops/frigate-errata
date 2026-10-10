@@ -73,7 +73,11 @@ class Harvester:
 
         controls = effective_controls(self.cfg, self.db, self.collect_labels)
         wanted = [l for l in self.collect_labels if controls.get(l, {}).get("collect_mode", "all") != "off"]
-        labels_param = wanted or None
+        if not wanted:
+            logger.info("no labels enabled for collection (all collect_mode: off); skipping harvest")
+            return 0
+        self._collected = set(wanted)
+        labels_param = wanted
 
         raw = self.db.kv_get("last_processed_at")
         since = float(raw) if raw else time.time() - self.lookback_hours * 3600
@@ -125,7 +129,12 @@ class Harvester:
         if isinstance(sub_label, (list, tuple)) and sub_label:
             sub_label = sub_label[0]
         sub_label = sub_label if isinstance(sub_label, str) else ""
-        brands = extract_brands(event, self.attribute_labels)
+        collected = getattr(self, "_collected", None)
+        brands = (
+            extract_brands(event, self.attribute_labels)
+            if collected is None or event.get("label") in collected
+            else []
+        )
         snapshot_path = ""
         if event.get("has_snapshot"):
             dest = str(Path(self.snapshot_dir) / f"{event_id}.jpg")

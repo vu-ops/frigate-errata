@@ -120,6 +120,8 @@ class Database:
             )
         if "sub_label" not in cols:
             conn.execute("ALTER TABLE events ADD COLUMN sub_label TEXT NOT NULL DEFAULT ''")
+        # Consolidate skipped into ignored (single dismissed status).
+        conn.execute("UPDATE events SET status='ignored' WHERE status='skipped'")
 
     @contextmanager
     def connect(self):
@@ -208,6 +210,7 @@ class Database:
         reason: str | None = None,
         corrected: str | None = None,
         limit: int = 200,
+        offset: int = 0,
     ) -> list[sqlite3.Row]:
         where = []
         params: list = []
@@ -238,11 +241,71 @@ class Database:
             "ORDER BY c.collected_at DESC, c.id DESC LIMIT 1) AS corrected_label "
             "FROM events e"
             + clause
-            + " ORDER BY e.priority DESC, e.start_time DESC LIMIT ?"
+            + " ORDER BY e.priority DESC, e.start_time DESC LIMIT ? OFFSET ?"
         )
         params.append(limit)
+        params.append(max(0, offset))
         with self.connect() as conn:
             return conn.execute(sql, params).fetchall()
+
+    def queue_total(
+        self,
+        status: str = "pending",
+        camera: str | None = None,
+        label: str | None = None,
+        reason: str | None = None,
+        corrected: str | None = None,
+    ) -> int:
+        where = []
+        params: list = []
+        if status == "pending":
+            where.append("status IN ('new', 'flagged')")
+        elif status and status != "all":
+            where.append("status = ?")
+            params.append(status)
+        if camera:
+            where.append("camera = ?")
+            params.append(camera)
+        if label:
+            where.append("label = ?")
+            params.append(label)
+        if reason:
+            where.append("flag_reason = ?")
+            params.append(reason)
+        if corrected:
+            where.append(
+                "(SELECT c2.correct_label FROM corrections c2 WHERE c2.event_id = e.id "
+                "ORDER BY c2.collected_at DESC, c2.id DESC LIMIT 1) = ?"
+            )
+            params.append(corrected)
+        clause = f" WHERE {' AND '.join(where)}" if where else ""
+        with self.connect() as conn:
+            row = conn.execute(f"SELECT COUNT(*) AS n FROM events e{clause}", params).fetchone()
+        return row["n"]
+
+    def ignored_for_purge(self, keep_hours: float) -> list[sqlite3.Row]:
+        """Ignored events older than keep_hours (clock = reviewed_at, else start_time)."""
+        if keep_hours <= 0:
+            return []
+        cutoff = time.time() - keep_hours * 3600
+        with self.connect() as conn:
+            return conn.execute(
+                "SELECT id, snapshot_path FROM events WHERE status = 'ignored' "
+                "AND COALESCE(reviewed_at, start_time, created_at) < ?",
+                (cutoff,),
+            ).fetchall()
+
+    def delete_events(self, ids: list[str]) -> int:
+        if not ids:
+            return 0
+        with self.connect() as conn:
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                marks = ",".join("?" * len(chunk))
+                conn.execute(f"DELETE FROM corrections WHERE event_id IN ({marks})", chunk)
+                conn.execute(f"DELETE FROM event_brands WHERE event_id IN ({marks})", chunk)
+                conn.execute(f"DELETE FROM events WHERE id IN ({marks})", chunk)
+        return len(ids)
 
     def pending_matching(
         self,

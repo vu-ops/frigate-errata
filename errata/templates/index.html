@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
-{% set return_to = 'camera=' ~ (filters.camera | urlencode) ~ '&label=' ~ (filters.label | urlencode) ~ '&reason=' ~ (filters.reason | urlencode) ~ '&corrected=' ~ (filters.corrected | urlencode) ~ '&status=' ~ (filters.status | urlencode) ~ '&brand=' ~ (filters.brand | urlencode) ~ '&brand_status=' ~ (filters.brand_status | urlencode) ~ '&brand_camera=' ~ (filters.brand_camera | urlencode) %}
+{% set qs_base = 'camera=' ~ (filters.camera | urlencode) ~ '&label=' ~ (filters.label | urlencode) ~ '&reason=' ~ (filters.reason | urlencode) ~ '&corrected=' ~ (filters.corrected | urlencode) ~ '&status=' ~ (filters.status | urlencode) ~ '&brand=' ~ (filters.brand | urlencode) ~ '&brand_status=' ~ (filters.brand_status | urlencode) ~ '&brand_camera=' ~ (filters.brand_camera | urlencode) %}
+{% set return_to = qs_base %}
 <div class="filters">
   <form method="get" action="{{ base }}/">
     <label>View
@@ -49,134 +50,169 @@
   </form>
 </div>
 
-<div class="section-head">Objects ({{ pending_count }} pending)</div>
-{% if rows %}
-<div class="grid">
-{% for row in rows %}
-{% set suggested = row.suggested_label.split(',')[0] if row.suggested_label else '' %}
-{% set corrected = row.corrected_label if row.corrected_label and row.corrected_label != 'false_positive' else '' %}
-{% set is_reviewed = row.status in reviewed_statuses %}
-{% set default_label = corrected or suggested or row.label %}
-  <div class="card">
-    <img src="{{ base }}/api/snapshots/{{ row.id }}/crop.jpg" alt="training crop" loading="lazy"
-         class="zoom crop-thumb" title="This is the training crop — click for full frame"
-         onclick="openLightbox('{{ base }}/api/snapshots/{{ row.id }}.jpg')">
-    <div class="body">
-      <div class="meta">
-        <span class="badge camera">{{ row.camera }}</span>
-        <span class="badge label">{{ row.label }}</span>
-        {% if corrected %}<span class="badge corrected">→ {{ corrected }}</span>{% endif %}
-        {% if is_reviewed %}<span class="badge status">{{ row.status }}</span>{% endif %}
-        {% if row.flag_reason %}<span class="badge {{ row.flag_reason }}">{{ row.flag_reason }}</span>{% endif %}
-        {% if suggested and suggested != row.label %}<span class="badge suggest">suggests: {{ row.suggested_label | replace(',', ', ') }}</span>{% endif %}
-        {% if row.sub_label %}<span class="badge">{{ row.sub_label }}</span>{% endif %}
-        <span>{{ '%.0f%%'|format((row.confidence or 0) * 100) }}</span>
-        <span>{{ row.start_time | localts }}</span>
-      </div>
-      {% if row.description %}<p class="desc">{{ row.description }}</p>{% endif %}
-      <div class="quick">
-        <form method="post" action="{{ base }}/review/{{ row.id }}">
-          <input type="hidden" name="return_to" value="{{ return_to }}">
-          <input type="hidden" name="action" value="confirm">
-          <input type="hidden" name="label" value="{{ row.label }}">
-          <button class="chip detected" title="Confirm as detected label">{{ row.label }}</button>
-        </form>
-        {% for s in row.suggested_label.split(',') if s and s != row.label %}
-        <form method="post" action="{{ base }}/review/{{ row.id }}">
-          <input type="hidden" name="return_to" value="{{ return_to }}">
-          <input type="hidden" name="action" value="confirm">
-          <input type="hidden" name="label" value="{{ s }}">
-          <button class="chip suggest" title="Confirm as suggested label">{{ s }}</button>
-        </form>
-        {% endfor %}
-        <button type="button" class="chip edit" title="Draw or adjust the box that this correction trains on"
-                onclick="openBoxEditor(this)"
-                data-event="{{ row.id }}"
-                data-box="{{ row.box or '' }}"
-                data-label="{{ row.label }}"
-                data-default-label="{{ default_label }}"
-                data-return-to="{{ return_to }}">Edit box</button>
-      </div>
-      <form class="actions" method="post" action="{{ base }}/review/{{ row.id }}">
-        <input type="hidden" name="return_to" value="{{ return_to }}">
+<div class="section-head">Objects ({{ total }} matching · {{ pending_count }} pending)</div>
+<div id="objects">
+  <form id="obj-bulk" method="post" action="{{ base }}/bulk/selected" data-section="objects" data-ids="event_ids" onsubmit="return errataInjectIds(this)">
+    <input type="hidden" name="return_to" value="{{ return_to }}">
+    <div class="sel-toolbar" id="obj-toolbar" hidden>
+      <strong><span id="obj-count">0</span> selected</strong>
+      {% if ignored_view %}
+      <button class="primary" name="action" value="reset">Unignore — back to queue</button>
+      {% else %}
+      <button class="primary" name="action" value="confirm">Confirm detected</button>
+      <button class="warn" name="action" value="false_positive">False positive</button>
+      <button name="action" value="ignore">Ignore</button>
+      <label class="inline">Change label to
         <select name="label">
-          {% for l in labels %}<option value="{{ l }}" {% if l == default_label %}selected{% endif %}>{{ l }}</option>{% endfor %}
-          {% if row.label not in labels %}<option value="{{ row.label }}" {% if row.label == default_label %}selected{% endif %}>{{ row.label }}</option>{% endif %}
-          {% if corrected and corrected not in labels %}<option value="{{ corrected }}" selected>{{ corrected }}</option>{% endif %}
-          {% if suggested and suggested not in labels %}<option value="{{ suggested }}" selected>{{ suggested }}</option>{% endif %}
-          <option value="false_positive">false_positive</option>
+          <option value="">— pick label —</option>
+          {% for l in labels %}<option value="{{ l }}">{{ l }}</option>{% endfor %}
         </select>
-        <button class="primary" name="action" value="confirm">Change</button>
-        <button class="warn" name="action" value="false_positive">False positive</button>
-        {% if is_reviewed %}
-        <button name="action" value="reset" formnovalidate>Undo review</button>
-        {% else %}
-        <button name="action" value="skip">Skip</button>
-        {% endif %}
-      </form>
+      </label>
+      <button class="primary" name="action" value="relabel">Apply label</button>
+      {% endif %}
+      <button type="button" onclick="errataClearSel('objects')">Clear</button>
     </div>
+
+    {% if rows %}
+    <div class="grid">
+    {% for row in rows %}
+    {% set suggested = row.suggested_label.split(',')[0] if row.suggested_label else '' %}
+    {% set corrected = row.corrected_label if row.corrected_label and row.corrected_label != 'false_positive' else '' %}
+    {% set is_reviewed = row.status in reviewed_statuses %}
+    {% set default_label = corrected or suggested or row.label %}
+      <div class="card selectable">
+        <input type="checkbox" class="pick" name="event_ids" value="{{ row.id }}" aria-label="select">
+        <img src="{{ base }}/api/snapshots/{{ row.id }}/preview.jpg" alt="preview" loading="lazy"
+             title="Wider context preview">
+        <div class="body">
+          <div class="meta">
+            <span class="badge camera">{{ row.camera }}</span>
+            <span class="badge label">{{ row.label }}</span>
+            {% if corrected %}<span class="badge corrected">→ {{ corrected }}</span>{% endif %}
+            {% if is_reviewed %}<span class="badge status">{{ row.status }}</span>{% endif %}
+            {% if row.flag_reason %}<span class="badge {{ row.flag_reason }}">{{ row.flag_reason }}</span>{% endif %}
+            {% if suggested and suggested != row.label %}<span class="badge suggest">{{ row.suggested_label | replace(',', ', ') }}</span>{% endif %}
+            {% if row.sub_label %}<span class="badge">{{ row.sub_label }}</span>{% endif %}
+            <span>{{ '%.0f%%'|format((row.confidence or 0) * 100) }}</span>
+            <span>{{ row.start_time | localts }}</span>
+          </div>
+          {% if row.description %}<p class="desc">{{ row.description }}</p>{% endif %}
+          <div class="quick">
+            <button type="button" class="chip edit" title="Full frame" onclick="openLightbox('{{ base }}/api/snapshots/{{ row.id }}.jpg')">Full frame</button>
+            <button type="button" class="chip edit" title="Draw or adjust the box that this correction trains on"
+                    onclick="openBoxEditor(this)"
+                    data-event="{{ row.id }}"
+                    data-box="{{ row.box or '' }}"
+                    data-label="{{ row.label }}"
+                    data-default-label="{{ default_label }}"
+                    data-return-to="{{ return_to }}">Edit</button>
+            <form method="post" action="{{ base }}/review/{{ row.id }}">
+              <input type="hidden" name="return_to" value="{{ return_to }}">
+              <input type="hidden" name="action" value="confirm">
+              <input type="hidden" name="label" value="{{ row.label }}">
+              <button class="chip detected" title="Confirm as detected label">{{ row.label }}</button>
+            </form>
+            {% for s in row.suggested_label.split(',') if s and s != row.label %}
+            <form method="post" action="{{ base }}/review/{{ row.id }}">
+              <input type="hidden" name="return_to" value="{{ return_to }}">
+              <input type="hidden" name="action" value="confirm">
+              <input type="hidden" name="label" value="{{ s }}">
+              <button class="chip suggest" title="Confirm as suggested label">{{ s }}</button>
+            </form>
+            {% endfor %}
+            <form method="post" action="{{ base }}/review/{{ row.id }}">
+              <input type="hidden" name="return_to" value="{{ return_to }}">
+              <input type="hidden" name="action" value="false_positive">
+              <button class="chip reject" title="Mark false positive">FP</button>
+            </form>
+            {% if is_reviewed %}
+            <form method="post" action="{{ base }}/review/{{ row.id }}">
+              <input type="hidden" name="return_to" value="{{ return_to }}">
+              <input type="hidden" name="action" value="reset">
+              <button class="chip" formnovalidate title="Undo and return to queue">Undo</button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty">No object events match this view.</div>
+    {% endif %}
+  </form>
+  {% if pages > 1 %}
+  <div class="pager">
+    {% if page > 1 %}<a href="{{ base }}/?{{ qs_base }}&page={{ page - 1 }}">‹ Prev</a>{% endif %}
+    <span class="meta">Page {{ page }} / {{ pages }}</span>
+    {% if page < pages %}<a href="{{ base }}/?{{ qs_base }}&page={{ page + 1 }}">Next ›</a>{% endif %}
   </div>
-{% endfor %}
+  {% endif %}
 </div>
-{% else %}
-<div class="empty">No object events match this view.</div>
-{% endif %}
 
 <div class="section-head">Brands ({{ brand_pending_count }} pending)</div>
-<div class="filters">
-  <form method="get" action="{{ base }}/">
-    <input type="hidden" name="status" value="{{ filters.status }}">
-    <input type="hidden" name="camera" value="{{ filters.camera }}">
-    <label>Brand
-      <select name="brand" onchange="this.form.submit()">
-        <option value="">All</option>
-        {% for a in attributes %}<option value="{{ a }}" {% if a == filters.brand %}selected{% endif %}>{{ a }}</option>{% endfor %}
-      </select>
-    </label>
-    <label>Status
-      <select name="brand_status" onchange="this.form.submit()">
-        {% for value, text in brand_statuses %}<option value="{{ value }}" {% if value == filters.brand_status %}selected{% endif %}>{{ text }}</option>{% endfor %}
-      </select>
-    </label>
-  </form>
-  <form method="post" action="{{ base }}/brands/bulk" onsubmit="return confirm('Apply to all brand items matching the filters?');">
-    <input type="hidden" name="brand" value="{{ filters.brand }}">
-    <input type="hidden" name="camera" value="{{ filters.brand_camera }}">
-    <input type="hidden" name="status" value="{{ filters.brand_status }}">
-    <input type="hidden" name="return_to" value="{{ return_to }}">
-    <button class="primary" name="action" value="confirm">Confirm all</button>
-    <button class="warn" name="action" value="rejected">Reject all</button>
-  </form>
-</div>
-{% if brand_rows %}
-<div class="grid">
-{% for b in brand_rows %}
-  <div class="card">
-    <img src="{{ base }}/api/snapshots/{{ b.event_id }}/crop.jpg" alt="brand crop" loading="lazy" class="zoom"
-         onclick="openLightbox('{{ base }}/api/snapshots/{{ b.event_id }}.jpg')">
-    <div class="body">
-      <div class="meta">
-        <span class="badge camera">{{ b.camera }}</span>
-        <span class="badge brand">{{ b.brand }}</span>
-        <span class="badge label">on {{ b.object_label }}</span>
-        <span class="badge status">{{ b.status }}</span>
-        {% if b.score %}<span>{{ '%.0f%%'|format(b.score * 100) }}</span>{% endif %}
-        <span>{{ b.start_time | localts }}</span>
-      </div>
-      {% if b.description %}<p class="desc">{{ b.description }}</p>{% endif %}
-      <form class="actions" method="post" action="{{ base }}/brand/{{ b.id }}">
-        <input type="hidden" name="return_to" value="{{ return_to }}">
-        <button class="chip confirm" name="action" value="confirm">Confirm brand</button>
-        <button class="chip reject" name="action" value="rejected">Reject</button>
-        <button name="action" value="reset" formnovalidate>Undo</button>
-      </form>
-    </div>
+<div id="brands">
+  <div class="filters">
+    <form method="get" action="{{ base }}/">
+      <input type="hidden" name="status" value="{{ filters.status }}">
+      <input type="hidden" name="camera" value="{{ filters.camera }}">
+      <label>Brand
+        <select name="brand" onchange="this.form.submit()">
+          <option value="">All</option>
+          {% for a in attributes %}<option value="{{ a }}" {% if a == filters.brand %}selected{% endif %}>{{ a }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Status
+        <select name="brand_status" onchange="this.form.submit()">
+          {% for value, text in brand_statuses %}<option value="{{ value }}" {% if value == filters.brand_status %}selected{% endif %}>{{ text }}</option>{% endfor %}
+        </select>
+      </label>
+    </form>
   </div>
-{% endfor %}
+  <form id="brand-bulk" method="post" action="{{ base }}/brands/bulk/selected" data-section="brands" data-ids="brand_ids" onsubmit="return errataInjectIds(this)">
+    <input type="hidden" name="return_to" value="{{ return_to }}">
+    <div class="sel-toolbar" id="brand-toolbar" hidden>
+      <strong><span id="brand-count">0</span> selected</strong>
+      <button class="chip confirm" name="action" value="confirm">Confirm</button>
+      <button class="chip reject" name="action" value="rejected">Reject</button>
+      <button name="action" value="reset">Undo</button>
+      <button type="button" onclick="errataClearSel('brands')">Clear</button>
+    </div>
+    {% if brand_rows %}
+    <div class="grid">
+    {% for b in brand_rows %}
+      <div class="card selectable">
+        <input type="checkbox" class="pick" name="brand_ids" value="{{ b.id }}" aria-label="select">
+        <img src="{{ base }}/api/snapshots/{{ b.event_id }}/preview.jpg" alt="brand preview" loading="lazy"
+             title="Wider context preview">
+        <div class="body">
+          <div class="meta">
+            <span class="badge camera">{{ b.camera }}</span>
+            <span class="badge brand">{{ b.brand }}</span>
+            <span class="badge label">on {{ b.object_label }}</span>
+            <span class="badge status">{{ b.status }}</span>
+            {% if b.score %}<span>{{ '%.0f%%'|format(b.score * 100) }}</span>{% endif %}
+            <span>{{ b.start_time | localts }}</span>
+          </div>
+          {% if b.description %}<p class="desc">{{ b.description }}</p>{% endif %}
+          <div class="quick">
+            <button type="button" class="chip edit" onclick="openLightbox('{{ base }}/api/snapshots/{{ b.event_id }}.jpg')">Full frame</button>
+            <form method="post" action="{{ base }}/brand/{{ b.id }}">
+              <input type="hidden" name="return_to" value="{{ return_to }}">
+              <button class="chip confirm" name="action" value="confirm">Confirm</button>
+              <button class="chip reject" name="action" value="rejected">Reject</button>
+              <button name="action" value="reset" formnovalidate>Undo</button>
+            </form>
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty">No brand items match this view.</div>
+    {% endif %}
+  </form>
 </div>
-{% else %}
-<div class="empty">No brand items match this view.</div>
-{% endif %}
 
 {% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
 <div class="stat-grid">
@@ -184,4 +220,8 @@
   <div class="stat"><div class="n">{{ brand_pending_count }}</div><div class="t">Brands pending</div></div>
   <div class="stat"><div class="n">{{ total_count }}</div><div class="t">Events tracked</div></div>
 </div>
+<script>
+errataSelect('objects', 'obj-toolbar', 'obj-count');
+errataSelect('brands', 'brand-toolbar', 'brand-count');
+</script>
 {% endblock %}

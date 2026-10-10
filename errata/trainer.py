@@ -902,24 +902,24 @@ def skip_degenerate_boxes(db: Database) -> None:
             r["event_id"] for r in conn.execute("SELECT DISTINCT event_id FROM corrections")
         }
     now = time.time()
-    skipped = guarded = 0
+    ignored = guarded = 0
     with db.connect() as conn:
         for row in rows:
-            if row["status"] == "skipped":
+            if row["status"] == "ignored":
                 continue
             if row["id"] in corrected:
                 guarded += 1
                 continue
             conn.execute(
-                "UPDATE events SET status = 'skipped', reviewed_at = ? WHERE id = ?",
+                "UPDATE events SET status = 'ignored', reviewed_at = ? WHERE id = ?",
                 (now, row["id"]),
             )
-            skipped += 1
+            ignored += 1
     logger.info(
-        "marked %d event(s) skipped, %d left untouched (human-corrected), %d already skipped",
-        skipped,
+        "marked %d event(s) ignored, %d left untouched (human-corrected), %d already ignored",
+        ignored,
         guarded,
-        len(rows) - skipped - guarded,
+        len(rows) - ignored - guarded,
     )
 
 
@@ -996,7 +996,7 @@ def main() -> None:
     parser.add_argument(
         "--skip-degenerate-boxes",
         action="store_true",
-        help="set status 'skipped' on events with degenerate boxes (human corrections are left untouched)",
+        help="set status 'ignored' on events with degenerate boxes (human corrections are left untouched)",
     )
     parser.add_argument(
         "--reanalyze-confirmed",
@@ -1051,7 +1051,7 @@ def main() -> None:
         rows = degenerate_box_events(db)
         log_box_report(rows)
         actionable = [r for r in rows if r["status"] in ("new", "flagged", "confirmed")]
-        logger.info("%d event(s) not yet skipped; fix with --skip-degenerate-boxes", len(actionable))
+        logger.info("%d event(s) not yet ignored; fix with --skip-degenerate-boxes", len(actionable))
         return
 
     if args.skip_degenerate_boxes:
