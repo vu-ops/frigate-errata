@@ -77,6 +77,14 @@ class TestTaxonomy(Base):
     def test_lookback_default_zero(self):
         self.assertEqual(self.cfg["harvest"]["lookback_hours"], 0)
 
+    def test_settings_env_expansion(self):
+        os.environ["OPENROUTER_API_KEY"] = "unit-test-key"
+        try:
+            cfg = load_config()
+        finally:
+            os.environ.pop("OPENROUTER_API_KEY", None)
+        self.assertEqual(cfg["review"]["genai_help"]["api_key"], "unit-test-key")
+
     def test_brand_synonyms_append(self):
         self.db.kv_set("synonyms_override", json.dumps({"coyote": ["brush wolf"]}))
         syn = effective_synonyms(self.cfg, self.db)

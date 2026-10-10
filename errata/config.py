@@ -34,7 +34,7 @@ def load_baseline() -> dict:
     except OSError:
         logger.warning("packaged settings.yaml not found at %s; using empty baseline", SETTINGS_PATH)
         return {}
-    return yaml.safe_load(text) or {}
+    return yaml.safe_load(expand_env(text)) or {}
 
 
 def _merge_append_into(parent: dict, key: str, base: dict, override: dict) -> None:
