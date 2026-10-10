@@ -311,7 +311,7 @@ class TestControlsPage(Base):
         self.assertIn("Auto-approve", html)
         self.assertIn("Include Auto Approved in Training", html)
         self.assertIn("Snapshot Limit", html)
-        self.assertIn("Disabled (Ignore)", html)
+        self.assertIn("Monitor Only (Ignore)", html)
 
 
 class TestResetDb(Base):

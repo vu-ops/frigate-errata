@@ -72,12 +72,17 @@ class Harvester:
         from .controls import effective_controls
 
         controls = effective_controls(self.cfg, self.db, self.collect_labels)
-        wanted = [l for l in self.collect_labels if controls.get(l, {}).get("collect_mode", "all") != "off"]
-        if not wanted:
-            logger.info("no labels enabled for collection (all collect_mode: off); skipping harvest")
+        if not self.collect_labels:
+            logger.info("no labels configured to track; skipping harvest")
             return 0
-        self._collected = set(wanted)
-        labels_param = wanted
+        # Monitor Only (collect_mode "off") labels are still harvested; the
+        # analyzer routes their events straight to ignored. Only brand review is
+        # gated below (no brand items for monitor-only labels).
+        self._collected = {
+            label for label in self.collect_labels
+            if controls.get(label, {}).get("collect_mode", "all") != "off"
+        }
+        labels_param = self.collect_labels
 
         raw = self.db.kv_get("last_processed_at")
         since = float(raw) if raw else time.time() - self.lookback_hours * 3600

@@ -437,7 +437,7 @@ function errataSelect(sectionId, toolbarId, countId) {
   sec.addEventListener('click', function (e) {
     const pick = e.target.closest ? e.target.closest('.pick') : null;
     if (pick) { pick._shift = e.shiftKey; return; }
-    if (e.target.closest && e.target.closest('a,button,select,input,form,label.inline,img')) return;
+    if (e.target.closest && e.target.closest('a,button,select,input,form,label.inline')) return;
     const card = e.target.closest('.card.selectable');
     if (!card) return;
     const box = card.querySelector('.pick');
@@ -513,5 +513,6 @@ function errataInjectIds(form) {
 }
 
 </script>
+{% block scripts %}{% endblock %}
 </body>
 </html>

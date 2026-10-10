@@ -5,7 +5,7 @@
 <div class="msg hint">
   Per-label controls. <strong>Collection</strong>: <em>Human + Machine Review</em>
   keeps everything, <em>Human Review Only</em> keeps only events needing a human
-  decision, <em>Disabled (Ignore)</em> collects nothing and parks events in Ignored.
+  decision, <em>Monitor Only (Ignore)</em> still collects events but sends them straight to Ignored (never reviewed; purged after the ignore window).
   <strong>GenAI Description Search</strong> scans GenAI descriptions of new events
   for this label's synonyms (across all detector labels) and surfaces matches for
   review — use it to grow a new label. <strong>Include in Training</strong> decides
@@ -26,7 +26,7 @@
         <option value="">apply to all…</option>
         <option value="all">Human + Machine Review</option>
         <option value="review_only">Human Review Only</option>
-        <option value="off">Disabled (Ignore)</option>
+        <option value="off">Monitor Only (Ignore)</option>
       </select>
     </th>
     <th>GenAI Description Search
@@ -72,7 +72,7 @@
       <select name="collect_mode_{{ label }}">
         <option value="all" {% if c.collect_mode == 'all' %}selected{% endif %}>Human + Machine Review</option>
         <option value="review_only" {% if c.collect_mode == 'review_only' %}selected{% endif %}>Human Review Only</option>
-        <option value="off" {% if c.collect_mode == 'off' %}selected{% endif %}>Disabled (Ignore)</option>
+        <option value="off" {% if c.collect_mode == 'off' %}selected{% endif %}>Monitor Only (Ignore)</option>
       </select>
     </td>
     <td><input type="checkbox" name="search_{{ label }}" {% if c.search %}checked{% endif %}></td>
