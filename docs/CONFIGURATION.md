@@ -401,7 +401,7 @@ else to do. Otherwise create a wrapper unit or just use
 | `POST /errata/api/models/activate` | Body `{"model": "errata_<stamp>.onnx"}`. Backs up the Frigate config, patches the model path via the Frigate API, saves with `save_option=restart`, waits for Frigate to return |
 | `POST /errata/api/models/backups/<id>/revert` | Restore a previous Frigate config backup (a fresh backup of the current config is taken first), then restart Frigate |
 | `GET /errata/api/dataset/stats` | Summarize the on-disk YOLO dataset (human/pseudo images and objects, backgrounds, per-class train/val counts); the summary page renders this and warns when unexported corrections are not yet in the dataset |
-| `GET /errata/controls` / `POST /errata/controls` / `POST /errata/controls/bulk` | Per-label controls: collect mode (`all`/`review_only`/`off`), search, include_training, auto_confirm, pseudo_labels; bulk-apply per column |
+| `GET /errata/controls` / `POST /errata/controls` | Per-label controls. UI names: Collection (`all`=Human + Machine Review, `review_only`=Human Review Only, `off`=Disabled (Ignore)), New Label Collection (`search`), Include in Training (`include_training`), Auto-approve (`auto_confirm`), Include Auto Approved in Training (`pseudo_labels`). Each column header has a dropdown that fills every row client-side before saving |
 | `POST /errata/brand/{id}` / `POST /errata/brands/bulk` | Confirm/reject a brand review item (metadata only) |
 | `GET /errata/api/snapshots/{id}/crop.jpg` | The actual training crop for an event (matches the trainer's region crop) |
 | `GET /errata/api/snapshots/{id}/preview.jpg` | Wider-context crop used by the review grid (scale `review.preview_scale`, rendered at `review.preview_imgsz`) |

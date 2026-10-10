@@ -71,11 +71,6 @@ def set_control(config: dict, db, label: str, **fields) -> dict:
     return current
 
 
-def bulk_set_control(config: dict, db, labels: list[str], field: str, value) -> None:
-    for label in labels:
-        set_control(config, db, label, **{field: value})
-
-
 def reset_all_disabled(config: dict, db, labels: list[str]) -> None:
     """Write disabled rows for every label (used by the reset flow)."""
     for label in labels:

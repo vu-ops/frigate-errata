@@ -3,20 +3,59 @@
 {% block content %}
 {% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
 <div class="msg hint">
-  Per-label controls. <strong>Collect</strong>: <code>all</code> keeps everything,
-  <code>review only</code> keeps only events needing a human decision,
-  <code>off</code> collects nothing. <strong>Search</strong> scans GenAI descriptions
-  of new events for this label's synonyms (across all detector labels) and surfaces
-  matches for review — use it to grow a new label. <strong>Train</strong> decides
-  whether a label is exported; off means collect-only. <strong>Auto-confirm</strong>
-  lets the analyzer confirm this label without a human. <strong>Pseudo</strong>
-  allows coherent auto-confirmed events to be reused as training labels.
+  Per-label controls. <strong>Collection</strong>: <em>Human + Machine Review</em>
+  keeps everything, <em>Human Review Only</em> keeps only events needing a human
+  decision, <em>Disabled (Ignore)</em> collects nothing and parks events in Ignored.
+  <strong>New Label Collection</strong> scans GenAI descriptions of new events for
+  this label's synonyms (across all detector labels) and surfaces matches for
+  review — use it to grow a new label. <strong>Include in Training</strong> decides
+  whether a label is exported; disabled means collect-only. <strong>Auto-approve</strong>
+  lets the analyzer confirm this label without a human. <strong>Include Auto Approved
+  in Training</strong> allows coherent auto-approved events to be reused as training
+  labels. Use a column's dropdown to fill every row at once, then uncheck the rows
+  you don't want and Save.
   {% if default_disabled %}<br><strong>Fresh-start mode is on</strong>: labels you add later default to disabled.{% endif %}
 </div>
 <form method="post" action="{{ base }}/controls">
 <table>
   <tr>
-    <th>Label</th><th>Collect</th><th>Search</th><th>Train</th><th>Auto-confirm</th><th>Pseudo</th>
+    <th>Label</th>
+    <th>Collection
+      <select class="bulk" data-field="collect_mode" aria-label="apply collection to all">
+        <option value="">apply to all…</option>
+        <option value="all">Human + Machine Review</option>
+        <option value="review_only">Human Review Only</option>
+        <option value="off">Disabled (Ignore)</option>
+      </select>
+    </th>
+    <th>New Label Collection
+      <select class="bulk" data-field="search" aria-label="apply new label collection to all">
+        <option value="">apply to all…</option>
+        <option value="enable">enable all</option>
+        <option value="disable">disable all</option>
+      </select>
+    </th>
+    <th>Include in Training
+      <select class="bulk" data-field="include_training" aria-label="apply include in training to all">
+        <option value="">apply to all…</option>
+        <option value="enable">enable all</option>
+        <option value="disable">disable all</option>
+      </select>
+    </th>
+    <th>Auto-approve
+      <select class="bulk" data-field="auto_confirm" aria-label="apply auto-approve to all">
+        <option value="">apply to all…</option>
+        <option value="enable">enable all</option>
+        <option value="disable">disable all</option>
+      </select>
+    </th>
+    <th>Include Auto Approved in Training
+      <select class="bulk" data-field="pseudo_labels" aria-label="apply include auto approved to all">
+        <option value="">apply to all…</option>
+        <option value="enable">enable all</option>
+        <option value="disable">disable all</option>
+      </select>
+    </th>
   </tr>
   {% for label, c in controls.items() %}
   <tr>
@@ -27,9 +66,9 @@
     </td>
     <td>
       <select name="collect_mode_{{ label }}">
-        {% for m in ['all', 'review_only', 'off'] %}
-        <option value="{{ m }}" {% if c.collect_mode == m %}selected{% endif %}>{{ m }}</option>
-        {% endfor %}
+        <option value="all" {% if c.collect_mode == 'all' %}selected{% endif %}>Human + Machine Review</option>
+        <option value="review_only" {% if c.collect_mode == 'review_only' %}selected{% endif %}>Human Review Only</option>
+        <option value="off" {% if c.collect_mode == 'off' %}selected{% endif %}>Disabled (Ignore)</option>
       </select>
     </td>
     <td><input type="checkbox" name="search_{{ label }}" {% if c.search %}checked{% endif %}></td>
@@ -43,31 +82,23 @@
   <button class="primary" type="submit">Save controls</button>
 </div>
 </form>
-
-<div class="section-title">Bulk apply to all labels</div>
-<form method="post" action="{{ base }}/controls/bulk" class="actions">
-  <label>Collect
-    <select name="value">
-      <option value="all">all</option>
-      <option value="review_only">review_only</option>
-      <option value="off">off</option>
-    </select>
-  </label>
-  <input type="hidden" name="field" value="collect_mode">
-  <button type="submit">Apply collect mode</button>
-</form>
-<div class="actions" style="margin-bottom: 1.5rem; flex-wrap: wrap;">
-  {% for field, on, off in [('search','on','off'), ('include_training','on','off'), ('auto_confirm','on','off'), ('pseudo_labels','on','off')] %}
-  <form method="post" action="{{ base }}/controls/bulk">
-    <input type="hidden" name="field" value="{{ field }}">
-    <input type="hidden" name="value" value="1">
-    <button type="submit">{{ field }}: on</button>
-  </form>
-  <form method="post" action="{{ base }}/controls/bulk">
-    <input type="hidden" name="field" value="{{ field }}">
-    <input type="hidden" name="value" value="0">
-    <button type="submit">{{ field }}: off</button>
-  </form>
-  {% endfor %}
-</div>
+<script>
+document.querySelectorAll('select.bulk').forEach(function (sel) {
+  sel.addEventListener('change', function () {
+    var field = sel.dataset.field;
+    if (!sel.value) return;
+    if (field === 'collect_mode') {
+      document.querySelectorAll('select[name^="collect_mode_"]').forEach(function (s) {
+        s.value = sel.value;
+      });
+    } else {
+      var on = sel.value === 'enable';
+      document.querySelectorAll('input[name^="' + field + '_"]').forEach(function (cb) {
+        cb.checked = on;
+      });
+    }
+    sel.value = '';
+  });
+});
+</script>
 {% endblock %}

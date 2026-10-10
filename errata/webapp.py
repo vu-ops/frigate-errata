@@ -26,7 +26,6 @@ from starlette.background import BackgroundTask
 from . import basemodels
 from .controls import (
     CONTROLS_DEFAULT_DISABLED_KEY,
-    bulk_set_control,
     effective_controls,
     effective_for_label,
     reset_all_disabled,
@@ -71,9 +70,6 @@ BULK_STATUS_ACTIONS = {
     "false_positive": "false_positive",
     "ignored": "ignore",
 }
-
-CONTROL_FIELDS = ["collect_mode", "search", "include_training", "auto_confirm", "pseudo_labels"]
-
 
 def format_ts(ts) -> str:
     if not ts:
@@ -567,23 +563,6 @@ def create_app(config: dict) -> FastAPI:
             )
         return RedirectResponse(
             f"{base}/controls?msg={quote('Label controls saved.')}", status_code=303
-        )
-
-    @router.post("/controls/bulk")
-    def controls_bulk(
-        field: str = Form(...),
-        value: str = Form(...),
-    ):
-        if field not in CONTROL_FIELDS:
-            raise HTTPException(status_code=400, detail="unknown control field")
-        all_labels = list(dict.fromkeys(labels + attribute_labels))
-        parsed = value
-        if field != "collect_mode":
-            parsed = value in ("1", "true", "on", "yes")
-        bulk_set_control(config, db, all_labels, field, parsed)
-        return RedirectResponse(
-            f"{base}/controls?msg={quote(f'Applied {field}={value} to all labels.')}",
-            status_code=303,
         )
 
     # ---- base models --------------------------------------------------------
