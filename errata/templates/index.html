@@ -83,7 +83,7 @@
       <div class="card selectable">
         <input type="checkbox" class="pick" name="event_ids" value="{{ row.id }}" aria-label="select">
         <img src="{{ base }}/api/snapshots/{{ row.id }}/preview.jpg" alt="preview" loading="lazy"
-             title="Wider context preview">
+             class="zoom" title="Click to expand" onclick="openLightbox('{{ base }}/api/snapshots/{{ row.id }}.jpg')">
         <div class="body">
           <div class="meta">
             <span class="badge camera">{{ row.camera }}</span>
@@ -184,7 +184,7 @@
       <div class="card selectable">
         <input type="checkbox" class="pick" name="brand_ids" value="{{ b.id }}" aria-label="select">
         <img src="{{ base }}/api/snapshots/{{ b.event_id }}/preview.jpg" alt="brand preview" loading="lazy"
-             title="Wider context preview">
+             class="zoom" title="Click to expand" onclick="openLightbox('{{ base }}/api/snapshots/{{ b.event_id }}.jpg')">
         <div class="body">
           <div class="meta">
             <span class="badge camera">{{ b.camera }}</span>
