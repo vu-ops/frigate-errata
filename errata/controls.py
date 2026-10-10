@@ -11,14 +11,14 @@ CONTROLS_DEFAULT_DISABLED_KEY = "controls_default_disabled"
 DISABLED_DEFAULTS = {
     "collect_mode": "off",
     "search": False,
-    "include_training": False,
-    "auto_confirm": False,
-    "pseudo_labels": False,
+    "human_verifications": "collect",
+    "machine_verifications": "collect",
     "keep": None,
 }
 
-_BOOL_FIELDS = ("search", "include_training", "auto_confirm", "pseudo_labels")
+_BOOL_FIELDS = ("search",)
 _VALID_COLLECT = ("all", "review_only", "off")
+_VALID_VERIFY = ("collect", "train")
 
 
 def _normalize(settings: dict) -> dict:
@@ -26,6 +26,8 @@ def _normalize(settings: dict) -> dict:
     out["collect_mode"] = out.get("collect_mode") if out.get("collect_mode") in _VALID_COLLECT else "all"
     for field in _BOOL_FIELDS:
         out[field] = bool(out.get(field))
+    for field in ("human_verifications", "machine_verifications"):
+        out[field] = out.get(field) if out.get(field) in _VALID_VERIFY else "train"
     keep = out.get("keep")
     try:
         out["keep"] = int(keep) if keep not in (None, "") else None
@@ -36,6 +38,9 @@ def _normalize(settings: dict) -> dict:
 
 def controls_default_disabled(db) -> bool:
     return db.kv_get(CONTROLS_DEFAULT_DISABLED_KEY) == "1"
+
+
+_PASSTHROUGH = ("collect_mode", "keep", "human_verifications", "machine_verifications")
 
 
 def effective_controls(config: dict, db, labels: list[str]) -> dict[str, dict]:
@@ -52,7 +57,7 @@ def effective_controls(config: dict, db, labels: list[str]) -> dict[str, dict]:
         row = stored.get(label) or {}
         merged = {**base}
         for key, value in row.items():
-            if key in ("collect_mode", "keep") or key in _BOOL_FIELDS:
+            if key in _PASSTHROUGH or key in _BOOL_FIELDS:
                 merged[key] = value
         result[label] = _normalize(merged)
     return result
@@ -65,14 +70,13 @@ def effective_for_label(config: dict, db, label: str) -> dict:
 def set_control(config: dict, db, label: str, **fields) -> dict:
     """Update one or more control fields, preserving the rest of the effective set."""
     current = effective_for_label(config, db, label)
-    current.update({k: v for k, v in fields.items() if k in ("collect_mode", "keep") or k in _BOOL_FIELDS})
+    current.update({k: v for k, v in fields.items() if k in _PASSTHROUGH or k in _BOOL_FIELDS})
     db.set_label_settings(
         label,
         collect_mode=current["collect_mode"],
         search=current["search"],
-        include_training=current["include_training"],
-        auto_confirm=current["auto_confirm"],
-        pseudo_labels=current["pseudo_labels"],
+        human_verifications=current["human_verifications"],
+        machine_verifications=current["machine_verifications"],
         keep=current.get("keep"),
     )
     return current
@@ -85,9 +89,8 @@ def reset_all_disabled(config: dict, db, labels: list[str]) -> None:
             label,
             collect_mode="off",
             search=False,
-            include_training=False,
-            auto_confirm=False,
-            pseudo_labels=False,
+            human_verifications="collect",
+            machine_verifications="collect",
             keep=None,
         )
     db.kv_set(CONTROLS_DEFAULT_DISABLED_KEY, "1")

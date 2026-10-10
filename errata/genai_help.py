@@ -15,6 +15,36 @@ def help_settings(cfg: dict) -> dict:
     return (cfg.get("review", {}) or {}).get("genai_help", {}) or {}
 
 
+def cache_key(kind: str, expected: str, model: str) -> str:
+    return f"{kind}|{expected or ''}|{model or ''}"
+
+
+def load_cache(raw) -> dict:
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def most_recent(cache: dict, kind: str, expected: str | None = None):
+    """Return (key, entry) for the newest cached result matching kind (and expected)."""
+    best = None
+    for key, entry in (cache or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        parts = str(key).split("|")
+        if not parts or parts[0] != kind:
+            continue
+        if expected is not None and (parts[1] if len(parts) > 1 else "") != expected:
+            continue
+        if best is None or float(entry.get("created_at") or 0) > float(best[1].get("created_at") or 0):
+            best = (key, entry)
+    return best
+
+
 def help_enabled(cfg: dict) -> bool:
     gh = help_settings(cfg)
     return bool(gh.get("enabled", True)) and bool(str(gh.get("api_key") or "").strip())

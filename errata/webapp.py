@@ -189,9 +189,30 @@ def create_app(config: dict) -> FastAPI:
             camera=brand_camera or None,
             limit=page_size,
         )
+        genai_enabled = genai.help_enabled(config)
+        genai_cards = {}
+        genai_brand_cards = {}
+        if genai_enabled:
+            event_cache = {}
+            for row in rows:
+                card = _genai_card(row, "object", row["label"])
+                if card:
+                    genai_cards[row["id"]] = card
+            for b in brand_rows:
+                ev = event_cache.get(b["event_id"])
+                if ev is None:
+                    ev = db.get_event(b["event_id"])
+                    event_cache[b["event_id"]] = ev
+                if ev is None:
+                    continue
+                card = _genai_card(ev, "brand", b["brand"])
+                if card:
+                    genai_brand_cards[b["id"]] = card
         ctx = {
             "rows": rows,
             "brand_rows": brand_rows,
+            "genai_cards": genai_cards,
+            "genai_brand_cards": genai_brand_cards,
             "labels": labels,
             "attributes": attribute_labels,
             "cameras": db.distinct_cameras(),
@@ -540,12 +561,18 @@ def create_app(config: dict) -> FastAPI:
 
     @router.get("/controls", response_class=HTMLResponse)
     def controls_page(request: Request, msg: str = ""):
+        from .trainer import verification_counts
+
         all_labels = list(dict.fromkeys(labels + attribute_labels))
         controls = effective_controls(config, db, all_labels)
+        counts = verification_counts(config, db)
+        for label in all_labels:
+            counts.setdefault(label, {"human": 0, "machine": 0})
         ctx = {
             "controls": controls,
             "labels": labels,
             "attributes": attribute_labels,
+            "counts": counts,
             "global_keep": int(config["review"].get("auto_keep_per_label", 150)),
             "default_disabled": bool(db.kv_get(CONTROLS_DEFAULT_DISABLED_KEY) == "1"),
             "msg": msg,
@@ -571,9 +598,8 @@ def create_app(config: dict) -> FastAPI:
                 config, db, label,
                 collect_mode=mode,
                 search=form.get(f"search_{label}") is not None,
-                include_training=form.get(f"include_training_{label}") is not None,
-                auto_confirm=form.get(f"auto_confirm_{label}") is not None,
-                pseudo_labels=form.get(f"pseudo_labels_{label}") is not None,
+                human_verifications=str(form.get(f"human_verifications_{label}", "collect")),
+                machine_verifications=str(form.get(f"machine_verifications_{label}", "collect")),
                 keep=keep,
             )
         return RedirectResponse(
@@ -675,6 +701,68 @@ def create_app(config: dict) -> FastAPI:
             raise HTTPException(status_code=404, detail="snapshot not available")
         return path
 
+    def _box_values(raw):
+        if not raw:
+            return None
+        try:
+            return tuple(float(v) for v in json.loads(raw))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+
+    def _entry_result(entry: dict) -> dict:
+        return {
+            "ok": True,
+            "model": entry.get("model"),
+            "matches": entry.get("matches"),
+            "label": entry.get("label"),
+            "description": entry.get("description"),
+            "confidence": entry.get("confidence"),
+            "box": entry.get("box") or {},
+        }
+
+    def _genai_payload(row, result: dict, cached: bool, created_at) -> dict:
+        """Attach preview-crop geometry to a GenAI result for the overlay UI."""
+        from .imaging import box_in_crop, preview_geometry
+
+        detector = _box_values(row["box"])
+        gbox = result.get("box") or {}
+        genai_frame = None
+        if gbox.get("found") and all(gbox.get(k) is not None for k in ("x", "y", "w", "h")):
+            genai_frame = (float(gbox["x"]), float(gbox["y"]), float(gbox["w"]), float(gbox["h"]))
+        payload = dict(result)
+        payload["cached"] = cached
+        payload["created_at"] = created_at
+        payload["detector_frame"] = detector
+        payload["genai_frame"] = genai_frame
+        payload["detector_crop"] = None
+        payload["genai_crop"] = None
+        path = row["snapshot_path"]
+        if path and Path(path).is_file():
+            try:
+                from PIL import Image
+
+                with Image.open(path) as im:
+                    fw, fh = im.size
+                x0, y0, side = preview_geometry(detector, fw, fh, scale=preview_scale)
+                payload["detector_crop"] = box_in_crop(detector, x0, y0, side, fw, fh)
+                if genai_frame is not None:
+                    payload["genai_crop"] = box_in_crop(genai_frame, x0, y0, side, fw, fh)
+            except Exception:
+                logger.exception("genai geometry failed for %s", row["id"])
+        return payload
+
+    def _genai_card(row, kind: str, expected: str):
+        """Most-recent cached GenAI result for a card, as overlay geometry."""
+        cache = genai.load_cache(row["genai"])
+        found = genai.most_recent(cache, kind, expected)
+        if not found:
+            return None
+        _key, entry = found
+        payload = _genai_payload(row, _entry_result(entry), True, entry.get("created_at"))
+        label = str(payload.get("label") or "").strip()
+        payload["usable"] = bool(label) and label.lower() != "none"
+        return payload
+
     @router.get("/api/snapshots/{event_id}.jpg")
     def snapshot(event_id: str):
         path = _snapshot_or_404(event_id)
@@ -732,8 +820,12 @@ def create_app(config: dict) -> FastAPI:
             return FileResponse(path, media_type="image/jpeg", headers=no_cache)
 
     @router.get("/api/snapshots/{event_id}/preview.jpg")
-    def snapshot_preview(event_id: str):
-        """Wider-context preview around the object (training crop is tighter)."""
+    def snapshot_preview(event_id: str, raw: int = 0):
+        """Wider-context preview around the object (training crop is tighter).
+
+        ``raw=1`` returns the crop without any baked-in box so the client can
+        draw its own Frigate/GenAI overlays.
+        """
         from .imaging import region_crop_pil_fit as region_crop_pil
 
         path = _snapshot_or_404(event_id)
@@ -751,7 +843,7 @@ def create_app(config: dict) -> FastAPI:
                 except (json.JSONDecodeError, TypeError, ValueError):
                     parsed = None
             crop, box_c = region_crop_pil(img, parsed, preview_imgsz, scale=preview_scale)
-            if box_c:
+            if box_c and not raw:
                 w_px, h_px = crop.size
                 x, y, w, h = box_c
                 draw = ImageDraw.Draw(crop)
@@ -795,8 +887,28 @@ def create_app(config: dict) -> FastAPI:
         else:
             expected = row["label"]
             allowed = labels
+        use_model = model or genai.help_settings(config).get("default_model") or ""
+        cache = genai.load_cache(row["genai"])
+        key = genai.cache_key(kind, expected, use_model)
+        cached_entry = cache.get(key)
+        if isinstance(cached_entry, dict):
+            payload = _genai_payload(row, _entry_result(cached_entry), True, cached_entry.get("created_at"))
+            return JSONResponse(payload, status_code=200)
         result = genai.analyze(config, path, kind, expected, allowed, model or None, box=row["box"])
-        return JSONResponse(result, status_code=200 if result.get("ok") else 400)
+        if not result.get("ok"):
+            return JSONResponse(result, status_code=400)
+        entry = {
+            "created_at": time.time(),
+            "model": result.get("model"),
+            "matches": result.get("matches"),
+            "label": result.get("label"),
+            "description": result.get("description"),
+            "confidence": result.get("confidence"),
+            "box": result.get("box"),
+        }
+        cache[key] = entry
+        db.set_event_genai(event_id, json.dumps(cache))
+        return JSONResponse(_genai_payload(row, result, False, entry["created_at"]), status_code=200)
 
     @router.get("/api/queue.json")
     def queue_json(status: str = "pending"):
@@ -904,7 +1016,7 @@ def create_app(config: dict) -> FastAPI:
             return JSONResponse({"ok": False, "detail": "a training run is already in progress"}, status_code=409)
         if not trained_class_map(config, db):
             return JSONResponse(
-                {"ok": False, "detail": "no labels have include_training enabled; enable one on the Controls page"},
+                {"ok": False, "detail": "no labels have a verification source set to 'Collect and Train'; enable one on the Controls page"},
                 status_code=400,
             )
         if importlib.util.find_spec("ultralytics") is None:

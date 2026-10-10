@@ -673,9 +673,8 @@ labels:
     defaults:
       collect_mode: all
       search: false
-      include_training: true
-      auto_confirm: true
-      pseudo_labels: true
+      human_verifications: train
+      machine_verifications: train
     reset_disabled: true
 training:
   enabled: true

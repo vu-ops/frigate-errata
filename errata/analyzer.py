@@ -154,7 +154,9 @@ class Analyzer:
         description = row["description"] or ""
         suggestion = ""
         ctl = controls.get(label, {}) or {}
-        auto_confirm = bool(ctl.get("auto_confirm", True))
+        # Machine review (auto-confirm of clean, coherent events) is enabled
+        # whenever Collection keeps both channels ("all" = Human + Machine).
+        machine_review = ctl.get("collect_mode", "all") == "all"
 
         # collect_mode "off": collect nothing for this label. Never flag; park
         # the event in ignored (it will be purged after review.keep_ignored_hours).
@@ -202,8 +204,8 @@ class Analyzer:
                 reason = "oversized"
                 priority = PRIORITY_OVERSIZED
 
-        # Per-label auto-confirm gates description-based suppression.
-        suppress = self.confirm_on_coherent and description_confirms and auto_confirm
+        # Machine review gates description-based suppression (auto-confirm).
+        suppress = self.confirm_on_coherent and description_confirms and machine_review
 
         if reason is None and confidence is not None and confidence < self.low_confidence_threshold:
             if not suppress:
@@ -219,10 +221,11 @@ class Analyzer:
                     priority = PRIORITY_NOISE
 
         if reason is None:
-            if auto_confirm:
+            if machine_review:
                 self.db.set_status(row["id"], "confirmed")
                 return "confirmed"
-            # Auto-confirm disabled for this label: clean events go to ignored.
+            # Machine review disabled for this label (Human Review Only):
+            # clean events go to ignored.
             self.db.set_status(row["id"], "ignored", reviewed=True)
             return "ignored"
 

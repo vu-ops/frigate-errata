@@ -411,11 +411,11 @@ else to do. Otherwise create a wrapper unit or just use
 | `POST /errata/api/models/activate` | Body `{"model": "errata_<stamp>.onnx"}`. Backs up the Frigate config, patches the model path via the Frigate API, saves with `save_option=restart`, waits for Frigate to return |
 | `POST /errata/api/models/backups/<id>/revert` | Restore a previous Frigate config backup (a fresh backup of the current config is taken first), then restart Frigate |
 | `GET /errata/api/dataset/stats` | Summarize the on-disk YOLO dataset (human/pseudo images and objects, backgrounds, per-class train/val counts); the summary page renders this and warns when unexported corrections are not yet in the dataset |
-| `GET /errata/controls` / `POST /errata/controls` | Per-label controls. UI names: Collection (`all`=Human + Machine Review, `review_only`=Human Review Only, `off`=Monitor Only (Ignore)), GenAI Description Search (`search`), Include in Training (`include_training`), Auto-approve (`auto_confirm`), Include Auto Approved in Training (`pseudo_labels`), Snapshot Limit (`keep`, blank = global `review.auto_keep_per_label`, 0 = keep forever). Each column header fills every row client-side before saving |
+| `GET /errata/controls` / `POST /errata/controls` | Per-label controls. UI names: Collection (`all`=Human + Machine Review, `review_only`=Human Review Only, `off`=Monitor Only (Ignore)), Frigate Description Search (`search`), Human Verifications and Machine Verifications (each `collect`=Collect Only \| `train`=Collect and Train; the count shown is the images that source contributes and *Collect and Train* is disabled at 0), Snapshot Limit (`keep`, blank = global `review.auto_keep_per_label`, 0 = keep forever). A label is trained when either verification source is `train`. Each column header fills every row client-side before saving |
 | `POST /errata/brand/{id}` / `POST /errata/brands/bulk` | Confirm/reject a brand review item (metadata only) |
 | `GET /errata/api/snapshots/{id}/crop.jpg` | The actual training crop for an event (matches the trainer's region crop) |
-| `GET /errata/api/snapshots/{id}/preview.jpg` | Wider-context crop used by the review grid (scale `review.preview_scale`, rendered at `review.preview_imgsz`) |
-| `POST /errata/api/genai_help/{id}` | Body `{"model": "<id>", "kind": "object"\|"brand", "expected": "<brand>"}`. Sends the clean full-frame snapshot plus the detector's box coordinates to OpenRouter; returns `{matches, label, description, confidence, box}` where `box` is an improved full-frame box. 503 when disabled (no API key). Enabled automatically when `review.genai_help.api_key` is set |
+| `GET /errata/api/snapshots/{id}/preview.jpg` | Wider-context crop used by the review grid (scale `review.preview_scale`, rendered at `review.preview_imgsz`). Add `?raw=1` to omit the baked-in detector box (the GenAI panel draws its own Frigate/GenAI overlays) |
+| `POST /errata/api/genai_help/{id}` | Body `{"model": "<id>", "kind": "object"\|"brand", "expected": "<brand>"}`. Sends the clean full-frame snapshot plus the detector's box coordinates to OpenRouter; returns `{matches, label, description, confidence, box}` where `box` is an improved full-frame box. Results are cached per event (keyed `kind\|expected\|model`) and reused without a new API call; the response adds `cached`, `created_at`, full-frame boxes (`detector_frame`, `genai_frame`) and preview-crop boxes (`detector_crop`, `genai_crop`). 503 when disabled (no API key). Enabled automatically when `review.genai_help.api_key` is set |
 | `GET /errata/base-models` / `POST /errata/base-models/import-plus` / `POST /errata/base-models/upload` / `POST /errata/base-models/{name}/delete` | Base-model registry, Frigate+ import (one-time key), uploads |
 | `POST /errata/api/reset` | Body `{"confirm": "RESET", "return_model": "<optional published model>"}`. Wipes all learned/review data + files, disables all label controls (base models kept), optionally re-activates a kept model, then saves a final Frigate config backup |
 | `GET /errata/api/train/status` | Training job state (running / finished / error + detail); also shown on the Summary page |
@@ -476,7 +476,10 @@ SQLite, WAL mode.
 - **event_brands** — brand review items: `event_id`, `brand`, `source`, `model`,
   `score`, `status` (`pending|confirmed|rejected`), `reviewed_at`, `created_at`.
 - **label_settings** — per-label controls: `label`, `collect_mode`, `search`,
-  `include_training`, `auto_confirm`, `pseudo_labels`, `updated_at`.
+  `human_verifications` (`collect|train`), `machine_verifications`
+  (`collect|train`), `keep`, `updated_at`.
+- **events.genai** — per-event JSON cache of GenAI Help results keyed
+  `kind|expected|model`; deleted with the event.
 - **base_models** — `name`, `source` (`yolo|frigate_plus|upload`), `format`
   (`pt|onnx`), `path`, `imgsz`, `labels`, `trainable`, `meta`, `created_at`.
 - **config** — key/value (progress markers, `synonyms_override`,

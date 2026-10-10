@@ -78,6 +78,35 @@ def region_crop_pil(img, box, imgsz: int, min_side: int = MIN_SIDE, scale: float
     return canvas.resize((imgsz, imgsz), Image.BILINEAR), box_c
 
 
+def preview_geometry(box, fw: int, fh: int, min_side: int = MIN_SIDE,
+                     scale: float = CROP_SCALE) -> tuple[int, int, int]:
+    """Square crop geometry clamped fully inside the frame (no black padding).
+
+    Returns ``(x0, y0, side)`` in pixels. Shared by the review preview and the
+    GenAI panel so frame boxes and crop boxes agree.
+    """
+    x0, y0, side, _ = region_geometry(box, fw, fh, min_side=min_side, scale=scale)
+    side = max(4, min(side, fw, fh))
+    x0 = min(max(int(x0), 0), max(0, fw - side))
+    y0 = min(max(int(y0), 0), max(0, fh - side))
+    return x0, y0, side
+
+
+def box_in_crop(box, x0: int, y0: int, side: int, fw: int, fh: int):
+    """Re-express a normalized full-frame box in the square crop's coordinates."""
+    if box is None:
+        return None
+    try:
+        px, py, pw, ph = box[0] * fw, box[1] * fh, box[2] * fw, box[3] * fh
+    except (TypeError, ValueError, IndexError):
+        return None
+    bx = min(max((px - x0) / side, 0.0), 1.0)
+    by = min(max((py - y0) / side, 0.0), 1.0)
+    bw = min(max(pw / side, 0.0), 1.0)
+    bh = min(max(ph / side, 0.0), 1.0)
+    return (bx, by, bw, bh)
+
+
 def region_crop_pil_fit(img, box, imgsz: int, min_side: int = MIN_SIDE, scale: float = CROP_SCALE):
     """Like region_crop_pil but clamped fully inside the frame -- no black padding.
 
@@ -88,22 +117,6 @@ def region_crop_pil_fit(img, box, imgsz: int, min_side: int = MIN_SIDE, scale: f
     from PIL import Image
 
     fw, fh = img.size
-    x0, y0, side, _ = region_geometry(box, fw, fh, min_side=min_side, scale=scale)
-    side = max(4, min(side, fw, fh))
-    x0 = min(max(int(x0), 0), max(0, fw - side))
-    y0 = min(max(int(y0), 0), max(0, fh - side))
+    x0, y0, side = preview_geometry(box, fw, fh, min_side=min_side, scale=scale)
     crop = img.crop((x0, y0, x0 + side, y0 + side)).resize((imgsz, imgsz), Image.BILINEAR)
-    box_c = None
-    parsed = None
-    try:
-        parsed = box
-        if parsed is not None:
-            px, py, pw, ph = parsed[0] * fw, parsed[1] * fh, parsed[2] * fw, parsed[3] * fh
-            bx = min(max((px - x0) / side, 0.0), 1.0)
-            by = min(max((py - y0) / side, 0.0), 1.0)
-            bw = min(max(pw / side, 0.0), 1.0)
-            bh = min(max(ph / side, 0.0), 1.0)
-            box_c = (bx, by, bw, bh)
-    except (TypeError, ValueError, IndexError):
-        box_c = None
-    return crop, box_c
+    return crop, box_in_crop(box, x0, y0, side, fw, fh)

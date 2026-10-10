@@ -58,6 +58,7 @@
         {% for m in genai_help.models %}<option value="{{ m.id }}" {% if m.id == genai_help.default_model %}selected{% endif %}>{{ m.name }}</option>{% endfor %}
       </select>
     </label>
+    <span class="gh-legend"><span><span class="sw"></span>Frigate</span><span><span class="sw gen"></span>GenAI</span></span>
     <span class="meta">Ask a vision model for a second opinion. The snapshot is sent to OpenRouter.</span>
   </form>
 </div>
@@ -93,10 +94,19 @@
     {% set corrected = row.corrected_label if row.corrected_label and row.corrected_label != 'false_positive' else '' %}
     {% set is_reviewed = row.status in reviewed_statuses %}
     {% set default_label = corrected or suggested or row.label %}
+      {% set gc = genai_cards.get(row.id) %}
       <div class="card selectable">
         <input type="checkbox" class="pick" name="event_ids" value="{{ row.id }}" aria-label="select">
-        <img src="{{ base }}/api/snapshots/{{ row.id }}/preview.jpg" alt="preview" loading="lazy"
-             title="Click to select">
+        <div class="card-img">
+          <img src="{{ base }}/api/snapshots/{{ row.id }}/preview.jpg" alt="preview" loading="lazy"
+               title="Click to select">
+          {% if gc and gc.detector_crop %}
+          <span class="gh-box detector" style="left:{{ (gc.detector_crop[0]*100)|round(2) }}%;top:{{ (gc.detector_crop[1]*100)|round(2) }}%;width:{{ (gc.detector_crop[2]*100)|round(2) }}%;height:{{ (gc.detector_crop[3]*100)|round(2) }}%"></span>
+          {% endif %}
+          {% if gc and gc.genai_crop %}
+          <span class="gh-box genai" style="left:{{ (gc.genai_crop[0]*100)|round(2) }}%;top:{{ (gc.genai_crop[1]*100)|round(2) }}%;width:{{ (gc.genai_crop[2]*100)|round(2) }}%;height:{{ (gc.genai_crop[3]*100)|round(2) }}%">{% if gc.label %}<span>{{ gc.label }}</span>{% endif %}</span>
+          {% endif %}
+        </div>
         <div class="body">
           <div class="meta">
             <span class="badge camera">{{ row.camera }}</span>
@@ -125,6 +135,15 @@
                     data-event="{{ row.id }}" data-kind="object"
                     data-box="{{ row.box or '' }}" data-label="{{ row.label }}"
                     data-return-to="{{ return_to }}">GenAI Help</button>
+            {% if gc and gc.usable %}
+            <form method="post" action="{{ base }}/review/{{ row.id }}">
+              <input type="hidden" name="return_to" value="{{ return_to }}">
+              <input type="hidden" name="action" value="confirm">
+              <input type="hidden" name="label" value="{{ gc.label }}">
+              {% if gc.genai_frame %}<input type="hidden" name="box" value="{{ gc.genai_frame | tojson }}">{% endif %}
+              <button class="chip genai" title="Confirm the cached GenAI suggestion">GenAI: {{ gc.label }}</button>
+            </form>
+            {% endif %}
             {% endif %}
             <form method="post" action="{{ base }}/review/{{ row.id }}">
               <input type="hidden" name="return_to" value="{{ return_to }}">
@@ -201,10 +220,19 @@
     {% if brand_rows %}
     <div class="grid">
     {% for b in brand_rows %}
+      {% set gbc = genai_brand_cards.get(b.id) %}
       <div class="card selectable">
         <input type="checkbox" class="pick" name="brand_ids" value="{{ b.id }}" aria-label="select">
-        <img src="{{ base }}/api/snapshots/{{ b.event_id }}/preview.jpg" alt="brand preview" loading="lazy"
-             title="Click to select">
+        <div class="card-img">
+          <img src="{{ base }}/api/snapshots/{{ b.event_id }}/preview.jpg" alt="brand preview" loading="lazy"
+               title="Click to select">
+          {% if gbc and gbc.detector_crop %}
+          <span class="gh-box detector" style="left:{{ (gbc.detector_crop[0]*100)|round(2) }}%;top:{{ (gbc.detector_crop[1]*100)|round(2) }}%;width:{{ (gbc.detector_crop[2]*100)|round(2) }}%;height:{{ (gbc.detector_crop[3]*100)|round(2) }}%"></span>
+          {% endif %}
+          {% if gbc and gbc.genai_crop %}
+          <span class="gh-box genai" style="left:{{ (gbc.genai_crop[0]*100)|round(2) }}%;top:{{ (gbc.genai_crop[1]*100)|round(2) }}%;width:{{ (gbc.genai_crop[2]*100)|round(2) }}%;height:{{ (gbc.genai_crop[3]*100)|round(2) }}%">{% if gbc.label %}<span>{{ gbc.label }}</span>{% endif %}</span>
+          {% endif %}
+        </div>
         <div class="body">
           <div class="meta">
             <span class="badge camera">{{ b.camera }}</span>
@@ -222,6 +250,16 @@
                     onclick="genaiHelp(this)"
                     data-event="{{ b.event_id }}" data-kind="brand" data-expected="{{ b.brand }}"
                     data-brand-id="{{ b.id }}" data-return-to="{{ return_to }}">GenAI Help</button>
+            {% if gbc %}
+            <form method="post" action="{{ base }}/brand/{{ b.id }}">
+              <input type="hidden" name="return_to" value="{{ return_to }}">
+              {% if gbc.matches %}
+              <button class="chip confirm" name="action" value="confirm" title="Confirm the cached GenAI verdict">GenAI: confirm</button>
+              {% else %}
+              <button class="chip reject" name="action" value="rejected" title="Reject the cached GenAI verdict">GenAI: reject</button>
+              {% endif %}
+            </form>
+            {% endif %}
             {% endif %}
             <form method="post" action="{{ base }}/brand/{{ b.id }}">
               <input type="hidden" name="return_to" value="{{ return_to }}">
@@ -287,27 +325,41 @@ if (typeof errataSelect === 'function') {
 
   function clamp01(v) { v = +v; return isFinite(v) ? Math.min(Math.max(v, 0), 1) : 0; }
 
+  function overlayBox(crop, cls, label) {
+    if (!crop || crop.length !== 4) return '';
+    return '<span class="gh-box ' + cls + '" style="left:' + (clamp01(crop[0]) * 100) + '%;top:' + (clamp01(crop[1]) * 100) +
+      '%;width:' + (clamp01(crop[2]) * 100) + '%;height:' + (clamp01(crop[3]) * 100) + '%">' +
+      (label ? '<span>' + esc(label) + '</span>' : '') + '</span>';
+  }
+
+  function frameJSON(frame) {
+    if (!frame || frame.length !== 4) return '';
+    return JSON.stringify([clamp01(frame[0]), clamp01(frame[1]), clamp01(frame[2]), clamp01(frame[3])]);
+  }
+
   function render(res, btn) {
     var kind = btn.dataset.kind, eventId = btn.dataset.event;
     var expected = kind === 'brand' ? (btn.dataset.expected || '') : (btn.dataset.label || '');
-    var box = res.box || {};
     var label = (res.label || '').trim();
     var usable = !!label && label.toLowerCase() !== 'none';
-    var imgHtml = '<img src="' + BASE + '/api/snapshots/' + encodeURIComponent(eventId) + '/clean.jpg" alt="snapshot">';
+    var imgHtml = '<img src="' + BASE + '/api/snapshots/' + encodeURIComponent(eventId) + '/preview.jpg?raw=1" alt="snapshot">';
     var overlay = '';
-    if (kind !== 'brand' && box && box.found) {
-      overlay = '<span class="gh-box" style="left:' + (clamp01(box.x) * 100) + '%;top:' + (clamp01(box.y) * 100) +
-        '%;width:' + (clamp01(box.w) * 100) + '%;height:' + (clamp01(box.h) * 100) + '%">' +
-        (usable ? '<span>' + esc(label) + '</span>' : '') + '</span>';
+    if (kind !== 'brand') {
+      overlay = overlayBox(res.detector_crop, 'detector', '') +
+                overlayBox(res.genai_crop, 'genai', usable ? label : '');
     }
     var verdict = res.matches
       ? '<span class="gh-agree">Model agrees: ' + esc(label || expected) + ' ✓</span>'
       : (usable ? '<span class="gh-disagree">Model disagrees — suggests ' + esc(label) + '</span>'
                 : '<span class="gh-disagree">No matching label</span>');
-    var html = '<div class="section-title">' + esc(res.model) + '</div>';
+    var html = '<div class="section-title">' + esc(res.model) +
+      (res.cached ? ' <span class="gh-cached">(cached)</span>' : '') + '</div>';
     html += '<div class="meta">' + verdict + ' ';
     if (res.confidence != null) html += '<span>' + Math.round((res.confidence || 0) * 100) + '%</span>';
     html += '</div>';
+    if (kind !== 'brand') {
+      html += '<div class="gh-legend"><span><span class="sw"></span>Frigate</span><span><span class="sw gen"></span>GenAI</span></div>';
+    }
     html += '<div class="gh-imgwrap">' + imgHtml + overlay + '</div>';
     html += '<p class="desc">' + esc(res.description || '') + '</p>';
     card.innerHTML = html;
@@ -320,22 +372,22 @@ if (typeof errataSelect === 'function') {
       var b2 = document.createElement('button'); b2.className = 'chip reject'; b2.textContent = 'Reject';
       b2.onclick = function () { submitBrand(btn.dataset.brandId, 'rejected', btn.dataset.returnTo || ''); };
       actions.appendChild(b1); actions.appendChild(b2);
-    } else if (usable) {
-      var rt = btn.dataset.returnTo || '';
-      var bL = document.createElement('button'); bL.className = 'chip detected';
-      bL.textContent = 'Use label: ' + label;
-      bL.onclick = function () { window.openBoxWith(eventId, btn.dataset.box || '', label, label, rt); close(); };
-      actions.appendChild(bL);
-      if (box && box.found) {
-        var arr = JSON.stringify([clamp01(box.x), clamp01(box.y), clamp01(box.w), clamp01(box.h)]);
-        var bB = document.createElement('button'); bB.className = 'primary'; bB.textContent = 'Use box';
-        bB.onclick = function () { window.openBoxWith(eventId, arr, label, label, rt); close(); };
-        actions.appendChild(bB);
-      }
     } else {
-      var warn = document.createElement('span'); warn.className = 'gh-disagree';
-      warn.textContent = '⚠ Human classification required';
-      actions.appendChild(warn);
+      var rt = btn.dataset.returnTo || '';
+      var detFrame = frameJSON(res.detector_frame);
+      var bF = document.createElement('button'); bF.className = 'chip detected'; bF.textContent = 'Keep Frigate';
+      bF.onclick = function () { window.openBoxWith(eventId, detFrame, expected, expected, rt); close(); };
+      actions.appendChild(bF);
+      if (usable) {
+        var gFrame = frameJSON(res.genai_frame) || detFrame;
+        var bG = document.createElement('button'); bG.className = 'primary'; bG.textContent = 'Keep GenAI: ' + label;
+        bG.onclick = function () { window.openBoxWith(eventId, gFrame, label, label, rt); close(); };
+        actions.appendChild(bG);
+      } else {
+        var warn = document.createElement('span'); warn.className = 'gh-disagree';
+        warn.textContent = '⚠ Human classification required';
+        actions.appendChild(warn);
+      }
     }
     var bc = document.createElement('button'); bc.type = 'button'; bc.textContent = 'Close'; bc.onclick = close;
     actions.appendChild(bc);

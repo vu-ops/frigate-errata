@@ -59,7 +59,7 @@ def _select_pseudo_labels(cfg: dict, db: Database, class_map: dict) -> list:
         label = row["label"]
         if label not in class_map:
             continue
-        if not (controls.get(label, {}) or {}).get("pseudo_labels", True):
+        if (controls.get(label, {}) or {}).get("machine_verifications", "train") != "train":
             continue
         if not is_plausible_box(row["box"]):
             continue
@@ -81,16 +81,58 @@ def _select_pseudo_labels(cfg: dict, db: Database, class_map: dict) -> list:
 
 
 
+def _label_trains(ctl: dict) -> bool:
+    """A label is a trained class when either verification source is set to train."""
+    return (ctl.get("human_verifications", "train") == "train"
+            or ctl.get("machine_verifications", "train") == "train")
+
+
 def trained_class_map(cfg: dict, db: Database) -> dict:
     """Label -> class index for the classes actually being trained.
 
-    Object classes (labels.track) whose per-label include_training control is
-    on. Brands/attributes and license_plate are never classes.
+    Object classes (labels.track) whose Human or Machine Verifications control
+    is "Collect and Train". Brands/attributes and license_plate are never classes.
     """
     track = list(cfg["labels"]["track"])
     controls = effective_controls(cfg, db, track)
-    trained = [l for l in track if (controls.get(l, {}) or {}).get("include_training", True)]
+    trained = [l for l in track if _label_trains(controls.get(l, {}) or {})]
     return {name: idx for idx, name in enumerate(trained)}
+
+
+def verification_counts(cfg: dict, db: Database) -> dict[str, dict]:
+    """Per-label image counts for the Controls page.
+
+    ``human`` = stored human corrections; ``machine`` = confirmed, coherent,
+    plausible/non-oversized events eligible to become machine verifications.
+    """
+    track = list(cfg["labels"]["track"])
+    human = db.correction_counts_by_label()
+    oversized_cfg = cfg["analysis"].get("oversized_box", {}) or {}
+    oversized_enabled = bool(oversized_cfg.get("enabled", True))
+    oversized_max_area = float(oversized_cfg.get("max_area", 0.4))
+    synonyms = effective_synonyms(cfg, db)
+    with db.connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM events WHERE status = 'confirmed' AND snapshot_path != ''"
+        ).fetchall()
+    machine: dict[str, int] = {}
+    for row in rows:
+        label = row["label"]
+        if label not in track:
+            continue
+        if not Path(row["snapshot_path"]).is_file():
+            continue
+        if not is_plausible_box(row["box"]):
+            continue
+        if oversized_enabled and is_oversized_box(row["box"], oversized_max_area):
+            continue
+        if not label_in_text(label, row["description"] or "", synonyms):
+            continue
+        machine[label] = machine.get(label, 0) + 1
+    return {
+        label: {"human": int(human.get(label, 0)), "machine": int(machine.get(label, 0))}
+        for label in track
+    }
 
 
 def export_dataset(cfg: dict, db: Database, imgsz: int | None = None) -> dict:
@@ -104,8 +146,8 @@ def export_dataset(cfg: dict, db: Database, imgsz: int | None = None) -> dict:
 
     if not class_map:
         logger.warning(
-            "no labels have include_training enabled; nothing to export. "
-            "Enable at least one label on the Controls page."
+            "no labels have a verification source set to 'Collect and Train'; "
+            "nothing to export. Enable at least one label on the Controls page."
         )
         return {"exported": 0, "train": 0, "val": 0, "background": 0, "pseudo": 0}
 
@@ -687,7 +729,7 @@ def run_training(
 
     if not trained_class_map(cfg, db):
         raise ValueError(
-            "no labels have include_training enabled; enable at least one label "
+            "no labels have a verification source set to 'Collect and Train'; enable one "
             "on the Controls page before training"
         )
 

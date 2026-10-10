@@ -2,21 +2,6 @@
 {% block title %}Errata — Controls{% endblock %}
 {% block content %}
 {% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
-<div class="msg hint">
-  Per-label controls. <strong>Collection</strong>: <em>Human + Machine Review</em>
-  keeps everything, <em>Human Review Only</em> keeps only events needing a human
-  decision, <em>Monitor Only (Ignore)</em> still collects events but sends them straight to Ignored (never reviewed; purged after the ignore window).
-  <strong>GenAI Description Search</strong> scans GenAI descriptions of new events
-  for this label's synonyms (across all detector labels) and surfaces matches for
-  review — use it to grow a new label. <strong>Include in Training</strong> decides
-  whether a label is exported; disabled means collect-only. <strong>Auto-approve</strong>
-  lets the analyzer confirm this label without a human. <strong>Include Auto Approved
-  in Training</strong> allows coherent auto-approved events to be reused as training
-  labels. <strong>Snapshot Limit</strong> caps how many auto-approved/ignored
-  snapshots are kept per label (blank = default {{ global_keep }}, 0 = keep forever).
-  Use a column's header control to fill every row at once, then adjust rows and Save.
-  {% if default_disabled %}<br><strong>Fresh-start mode is on</strong>: labels you add later default to disabled.{% endif %}
-</div>
 <form method="post" action="{{ base }}/controls">
 <table>
   <tr>
@@ -29,32 +14,25 @@
         <option value="off">Monitor Only (Ignore)</option>
       </select>
     </th>
-    <th>GenAI Description Search
-      <select class="bulk" data-field="search" aria-label="apply GenAI description search to all">
+    <th>Frigate Description Search
+      <select class="bulk" data-field="search" aria-label="apply Frigate description search to all">
         <option value="">apply to all…</option>
         <option value="enable">enable all</option>
         <option value="disable">disable all</option>
       </select>
     </th>
-    <th>Include in Training
-      <select class="bulk" data-field="include_training" aria-label="apply include in training to all">
+    <th>Human Verifications
+      <select class="bulk" data-field="human_verifications" aria-label="apply human verifications to all">
         <option value="">apply to all…</option>
-        <option value="enable">enable all</option>
-        <option value="disable">disable all</option>
+        <option value="collect">Collect Only</option>
+        <option value="train">Collect and Train</option>
       </select>
     </th>
-    <th>Auto-approve
-      <select class="bulk" data-field="auto_confirm" aria-label="apply auto-approve to all">
+    <th>Machine Verifications
+      <select class="bulk" data-field="machine_verifications" aria-label="apply machine verifications to all">
         <option value="">apply to all…</option>
-        <option value="enable">enable all</option>
-        <option value="disable">disable all</option>
-      </select>
-    </th>
-    <th>Include Auto Approved in Training
-      <select class="bulk" data-field="pseudo_labels" aria-label="apply include auto approved to all">
-        <option value="">apply to all…</option>
-        <option value="enable">enable all</option>
-        <option value="disable">disable all</option>
+        <option value="collect">Collect Only</option>
+        <option value="train">Collect and Train</option>
       </select>
     </th>
     <th>Snapshot Limit
@@ -62,11 +40,14 @@
     </th>
   </tr>
   {% for label, c in controls.items() %}
+  {% set is_brand = label in attributes %}
+  {% set n_human = counts.get(label, {}).get('human', 0) %}
+  {% set n_machine = counts.get(label, {}).get('machine', 0) %}
   <tr>
     <td class="k">
       <input type="hidden" name="present_{{ label }}" value="1">
-      <span class="badge {{ 'brand' if label in attributes else 'label' }}">{{ label }}</span>
-      {% if label in attributes %}<span class="meta">brand</span>{% endif %}
+      <span class="badge {{ 'brand' if is_brand else 'label' }}">{{ label }}</span>
+      {% if is_brand %}<span class="meta">brand</span>{% endif %}
     </td>
     <td>
       <select name="collect_mode_{{ label }}">
@@ -76,11 +57,30 @@
       </select>
     </td>
     <td><input type="checkbox" name="search_{{ label }}" {% if c.search %}checked{% endif %}></td>
-    <td><input type="checkbox" name="include_training_{{ label }}" {% if c.include_training %}checked{% endif %}></td>
-    <td><input type="checkbox" name="auto_confirm_{{ label }}" {% if c.auto_confirm %}checked{% endif %}></td>
-    <td><input type="checkbox" name="pseudo_labels_{{ label }}" {% if c.pseudo_labels %}checked{% endif %}></td>
     <td>
-      {% if label in attributes %}
+      {% if is_brand %}
+      <span class="meta">—</span>
+      {% else %}
+      <select name="human_verifications_{{ label }}">
+        <option value="collect" {% if c.human_verifications == 'collect' %}selected{% endif %}>Collect Only</option>
+        <option value="train" {% if c.human_verifications == 'train' %}selected{% endif %} {% if n_human == 0 %}disabled{% endif %}>Collect and Train</option>
+      </select>
+      <span class="meta">({{ n_human }})</span>
+      {% endif %}
+    </td>
+    <td>
+      {% if is_brand %}
+      <span class="meta">—</span>
+      {% else %}
+      <select name="machine_verifications_{{ label }}">
+        <option value="collect" {% if c.machine_verifications == 'collect' %}selected{% endif %}>Collect Only</option>
+        <option value="train" {% if c.machine_verifications == 'train' %}selected{% endif %} {% if n_machine == 0 %}disabled{% endif %}>Collect and Train</option>
+      </select>
+      <span class="meta">({{ n_machine }})</span>
+      {% endif %}
+    </td>
+    <td>
+      {% if is_brand %}
       <span class="meta">—</span>
       {% else %}
       <input type="number" min="0" name="keep_{{ label }}" value="{{ c.keep if c.keep is not none else '' }}"
@@ -101,6 +101,12 @@ document.querySelectorAll('select.bulk').forEach(function (sel) {
     if (!sel.value) return;
     if (field === 'collect_mode') {
       document.querySelectorAll('select[name^="collect_mode_"]').forEach(function (s) { s.value = sel.value; });
+    } else if (field === 'human_verifications' || field === 'machine_verifications') {
+      document.querySelectorAll('select[name^="' + field + '_"]').forEach(function (s) {
+        var opt = s.querySelector('option[value="' + sel.value + '"]');
+        if (opt && opt.disabled) return;
+        s.value = sel.value;
+      });
     } else {
       var on = sel.value === 'enable';
       document.querySelectorAll('input[name^="' + field + '_"]').forEach(function (cb) { cb.checked = on; });

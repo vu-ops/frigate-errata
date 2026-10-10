@@ -103,15 +103,19 @@ Frigate API ──▶ harvester ──▶ SQLite ──▶ analyzer ──▶ re
   detected as `car` and separately carries a brand item (`usps`). Brands are
   never detector classes, so a class can't mix person-shaped and van-shaped
   boxes.
-- **Candidates** are object classes with `include_training` off and `search` on.
-  While search is on, the analyzer scans GenAI descriptions of new events for the
-  label's synonyms (across all detector labels) and surfaces matches as normal
-  review items — the way to build up a new label like `coyote` before training
-  it. Turn `include_training` on when you have enough samples; class indices
-  change, so retrain.
+- **Candidates** are object classes with both verification sources set to
+  *Collect Only* and `search` on. While search is on, the analyzer scans Frigate's
+  GenAI descriptions of new events for the label's synonyms (across all detector
+  labels) and surfaces matches as normal review items — the way to build up a new
+  label like `coyote` before training it. Set a verification source to *Collect
+  and Train* when you have enough samples; class indices change, so retrain.
 
-Per-label controls live on the **Controls** page (collect mode, search,
-train/collect-only, auto-confirm, pseudo-labels). A candidate hit always
+Per-label controls live on the **Controls** page (Collection, Frigate Description
+Search, Human Verifications, Machine Verifications, Snapshot Limit). *Human
+Verifications* and *Machine Verifications* are each **Collect Only** or **Collect
+and Train**; the number shown is how many images that source currently
+contributes, and *Collect and Train* is disabled when the count is 0. A label is
+trained when either source is *Collect and Train*. A candidate hit always
 surfaces, overriding the detected label's auto-confirm.
 
 ## Reset / start over

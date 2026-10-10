@@ -117,9 +117,8 @@ def control_defaults(config: dict) -> dict:
     return {
         "collect_mode": "all",
         "search": False,
-        "include_training": True,
-        "auto_confirm": True,
-        "pseudo_labels": True,
+        "human_verifications": "train",
+        "machine_verifications": "train",
         "keep": None,
         **(controls.get("defaults") or {}),
     }

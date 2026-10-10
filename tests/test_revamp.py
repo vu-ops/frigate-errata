@@ -103,7 +103,7 @@ class TestHarvesterBrands(unittest.TestCase):
 
 
 class TestAnalyzer(Base):
-    def test_candidate_search_overrides_auto_confirm(self):
+    def test_candidate_search_surfaces_label(self):
         self.add_event("e1", "dog", description="a coyote on the lawn")
         set_control(self.cfg, self.db, "coyote", search=True)
         stats = Analyzer(self.cfg, self.db).run()
@@ -113,13 +113,14 @@ class TestAnalyzer(Base):
         self.assertEqual(row["flag_reason"], "candidate")
         self.assertEqual(row["suggested_label"], "coyote")
 
-    def test_auto_confirm_off_skips_clean_events(self):
+    def test_machine_review_off_skips_clean_events(self):
         self.add_event("e2", "car", description="a car")
-        set_control(self.cfg, self.db, "car", auto_confirm=False)
+        set_control(self.cfg, self.db, "car", collect_mode="review_only")
         Analyzer(self.cfg, self.db).run()
-        self.assertEqual(self.db.get_event("e2")["status"], "ignored")
+        # Human Review Only: a clean event is ignored, then dropped (never reviewed).
+        self.assertIsNone(self.db.get_event("e2"))
 
-    def test_auto_confirm_on_confirms_clean(self):
+    def test_machine_review_on_confirms_clean(self):
         self.add_event("e3", "car", description="a car")
         Analyzer(self.cfg, self.db).run()
         self.assertEqual(self.db.get_event("e3")["status"], "confirmed")
@@ -162,7 +163,8 @@ class TestExport(Base):
         self.add_event("e1", "dog", correct="dog")
         self.add_event("e2", "car", correct="usps")     # attribute -> dropped
         self.add_event("e3", "dog", correct="coyote")   # candidate -> held
-        set_control(self.cfg, self.db, "coyote", include_training=False)
+        set_control(self.cfg, self.db, "coyote",
+                    human_verifications="collect", machine_verifications="collect")
         counts = trainer.export_dataset(self.cfg, self.db)
         self.assertGreaterEqual(counts["exported"], 1)
         labels = (Path(self.cfg["training"]["dataset_dir"]) / "labels.txt").read_text().split()
@@ -187,11 +189,13 @@ class TestControls(Base):
                            tracked_labels(self.cfg) + attribute_labels(self.cfg))
         cfg = effective_for_label(self.cfg, self.db, "car")
         self.assertEqual(cfg["collect_mode"], "off")
-        self.assertFalse(cfg["include_training"])
+        self.assertEqual(cfg["human_verifications"], "collect")
+        self.assertEqual(cfg["machine_verifications"], "collect")
         # a "new" label not in the reset list inherits disabled via the flag
         fresh = effective_controls(self.cfg, self.db, ["brand_new"])["brand_new"]
         self.assertEqual(fresh["collect_mode"], "off")
-        self.assertFalse(fresh["include_training"])
+        self.assertEqual(fresh["human_verifications"], "collect")
+        self.assertEqual(fresh["machine_verifications"], "collect")
 
 
 class TestBaseModels(Base):
@@ -321,12 +325,13 @@ class TestControlsPage(Base):
         app = webapp_mod.create_app(self.cfg)
         with TestClient(app) as c:
             html = c.get("/errata/controls").text
-        self.assertEqual(html.count('class="bulk"'), 5)
-        self.assertIn("GenAI Description Search", html)
-        self.assertIn("Auto-approve", html)
-        self.assertIn("Include Auto Approved in Training", html)
+        self.assertEqual(html.count('class="bulk"'), 4)
+        self.assertIn("Frigate Description Search", html)
+        self.assertIn("Human Verifications", html)
+        self.assertIn("Machine Verifications", html)
         self.assertIn("Snapshot Limit", html)
         self.assertIn("Monitor Only (Ignore)", html)
+        self.assertNotIn("Auto-approve", html)
 
 
 class TestResetDb(Base):
@@ -339,6 +344,88 @@ class TestResetDb(Base):
         self.assertEqual(self.db.brand_count("all"), 0)
         self.assertEqual(self.db.corrections_count(), 0)
         self.assertGreater(len(self.db.base_models()), 0)
+
+
+class TestVerificationCounts(Base):
+    def test_human_and_machine_counts(self):
+        from errata.trainer import verification_counts
+
+        self.add_event("e1", "car", correct="car", description="a car")
+        self.add_event("e2", "car", description="a car")
+        self.db.set_status("e2", "confirmed")
+        counts = verification_counts(self.cfg, self.db)
+        self.assertEqual(counts["car"]["human"], 1)
+        self.assertGreaterEqual(counts["car"]["machine"], 1)
+
+    def test_event_genai_roundtrip(self):
+        self.add_event("e1", "car", description="a car")
+        self.db.set_event_genai("e1", json.dumps({"object|car|m": {"created_at": 1}}))
+        self.assertIn("object|car|m", self.db.get_event("e1")["genai"])
+
+
+class TestGenAICache(unittest.TestCase):
+    def test_cache_key_and_most_recent(self):
+        cache = {
+            genai_help.cache_key("object", "cat", "m1"): {"created_at": 1, "label": "cat"},
+            genai_help.cache_key("object", "cat", "m2"): {"created_at": 2, "label": "dog"},
+            genai_help.cache_key("brand", "usps", "m1"): {"created_at": 3, "label": "usps"},
+        }
+        key, entry = genai_help.most_recent(cache, "object", "cat")
+        self.assertEqual(entry["label"], "dog")
+        self.assertEqual(genai_help.most_recent(cache, "object", "dog"), None)
+        self.assertEqual(genai_help.most_recent(cache, "brand", "usps")[1]["label"], "usps")
+
+    def test_load_cache_handles_garbage(self):
+        self.assertEqual(genai_help.load_cache(None), {})
+        self.assertEqual(genai_help.load_cache("not json"), {})
+        self.assertEqual(genai_help.load_cache("[1,2]"), {})
+        self.assertEqual(genai_help.load_cache('{"a": 1}'), {"a": 1})
+
+
+class TestGenAIEndpoint(Base):
+    def test_second_call_is_cached(self):
+        from errata import scheduler as sched_mod
+        from errata import webapp as webapp_mod
+        from starlette.testclient import TestClient
+
+        self.cfg["review"]["genai_help"]["api_key"] = "test-key"
+        model = self.cfg["review"]["genai_help"]["default_model"]
+        self.add_event("e1", "cat", description="a cat", box="[0.1,0.1,0.3,0.3]")
+        calls = {"n": 0}
+
+        def fake(cfg, path, kind, expected, allowed, model=None, box=None):
+            calls["n"] += 1
+            return {"ok": True, "model": model, "matches": True, "label": "cat",
+                    "description": "a cat", "confidence": 0.9,
+                    "box": {"found": True, "x": 0.1, "y": 0.1, "w": 0.3, "h": 0.3}}
+
+        orig = genai_help.analyze
+        genai_help.analyze = fake
+        sched_mod.Scheduler.start = lambda self: None
+        sched_mod.Scheduler.stop = lambda self: None
+        try:
+            app = webapp_mod.create_app(self.cfg)
+            with TestClient(app) as c:
+                r1 = c.post("/errata/api/genai_help/e1", json={"kind": "object", "model": model}).json()
+                r2 = c.post("/errata/api/genai_help/e1", json={"kind": "object", "model": model}).json()
+        finally:
+            genai_help.analyze = orig
+        self.assertFalse(r1["cached"])
+        self.assertTrue(r2["cached"])
+        self.assertEqual(calls["n"], 1)
+        self.assertIsNotNone(r1["detector_crop"])
+        self.assertIsNotNone(r1["genai_crop"])
+
+
+class TestPreviewGeometry(unittest.TestCase):
+    def test_box_in_crop_matches_fit(self):
+        from errata.imaging import box_in_crop, preview_geometry, region_crop_pil_fit
+
+        img = Image.new("RGB", (1816, 816), (10, 20, 30))
+        box = (0.7836, 0.8946, 0.0402, 0.0944)
+        x0, y0, side = preview_geometry(box, *img.size, scale=1.33)
+        _crop, box_c = region_crop_pil_fit(img, box, 640, scale=1.33)
+        self.assertEqual(box_in_crop(box, x0, y0, side, *img.size), box_c)
 
 
 if __name__ == "__main__":

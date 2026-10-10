@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS events (
     priority INTEGER DEFAULT 0,
     suggested_label TEXT NOT NULL DEFAULT '',
     sub_label TEXT NOT NULL DEFAULT '',
+    genai TEXT NOT NULL DEFAULT '',
     created_at REAL NOT NULL,
     reviewed_at REAL
 );
@@ -84,9 +85,8 @@ CREATE TABLE IF NOT EXISTS label_settings (
     label TEXT PRIMARY KEY,
     collect_mode TEXT NOT NULL DEFAULT 'all',
     search INTEGER NOT NULL DEFAULT 0,
-    include_training INTEGER NOT NULL DEFAULT 1,
-    auto_confirm INTEGER NOT NULL DEFAULT 1,
-    pseudo_labels INTEGER NOT NULL DEFAULT 1,
+    human_verifications TEXT NOT NULL DEFAULT 'train',
+    machine_verifications TEXT NOT NULL DEFAULT 'train',
     keep INTEGER,
     updated_at REAL
 );
@@ -121,11 +121,33 @@ class Database:
             )
         if "sub_label" not in cols:
             conn.execute("ALTER TABLE events ADD COLUMN sub_label TEXT NOT NULL DEFAULT ''")
+        if "genai" not in cols:
+            conn.execute("ALTER TABLE events ADD COLUMN genai TEXT NOT NULL DEFAULT ''")
         # Consolidate skipped into ignored (single dismissed status).
         conn.execute("UPDATE events SET status='ignored' WHERE status='skipped'")
         ls_cols = {row[1] for row in conn.execute("PRAGMA table_info(label_settings)").fetchall()}
         if ls_cols and "keep" not in ls_cols:
             conn.execute("ALTER TABLE label_settings ADD COLUMN keep INTEGER")
+        # Verifications revamp: replace include_training/auto_confirm/pseudo_labels
+        # with human_verifications/machine_verifications (each 'collect'|'train').
+        if ls_cols and "human_verifications" not in ls_cols:
+            conn.execute(
+                "ALTER TABLE label_settings ADD COLUMN human_verifications TEXT NOT NULL DEFAULT 'train'"
+            )
+            if "include_training" in ls_cols:
+                conn.execute(
+                    "UPDATE label_settings SET human_verifications = "
+                    "CASE WHEN include_training = 1 THEN 'train' ELSE 'collect' END"
+                )
+        if ls_cols and "machine_verifications" not in ls_cols:
+            conn.execute(
+                "ALTER TABLE label_settings ADD COLUMN machine_verifications TEXT NOT NULL DEFAULT 'train'"
+            )
+            if "pseudo_labels" in ls_cols:
+                conn.execute(
+                    "UPDATE label_settings SET machine_verifications = "
+                    "CASE WHEN pseudo_labels = 1 THEN 'train' ELSE 'collect' END"
+                )
 
     @contextmanager
     def connect(self):
@@ -405,6 +427,15 @@ class Database:
             row = conn.execute("SELECT COUNT(*) AS n FROM corrections").fetchone()
         return row["n"]
 
+    def correction_counts_by_label(self) -> dict[str, int]:
+        """Human verification image counts per label (false positives excluded)."""
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT correct_label AS k, COUNT(*) AS n FROM corrections "
+                "WHERE correct_label != 'false_positive' GROUP BY correct_label"
+            ).fetchall()
+        return {row["k"]: row["n"] for row in rows}
+
     def corrections_unexported(self) -> list[sqlite3.Row]:
         with self.connect() as conn:
             return conn.execute(
@@ -520,6 +551,10 @@ class Database:
             conn.execute(
                 "UPDATE events SET snapshot_path = ? WHERE id = ?", (path, event_id)
             )
+
+    def set_event_genai(self, event_id: str, data: str) -> None:
+        with self.connect() as conn:
+            conn.execute("UPDATE events SET genai = ? WHERE id = ?", (data, event_id))
 
     def model_version_insert(self, model_path: str, training_count: int, metrics: str) -> None:
         with self.connect() as conn:
@@ -749,7 +784,7 @@ class Database:
         return dict(row) if row else None
 
     def set_label_settings(self, label: str, **fields) -> None:
-        allowed = ("collect_mode", "search", "include_training", "auto_confirm", "pseudo_labels", "keep")
+        allowed = ("collect_mode", "search", "human_verifications", "machine_verifications", "keep")
         row = self.label_settings(label) or {"label": label}
         values = {k: row.get(k) for k in allowed}
         for key, value in fields.items():
@@ -763,14 +798,13 @@ class Database:
             conn.execute(
                 """
                 INSERT INTO label_settings
-                    (label, collect_mode, search, include_training, auto_confirm, pseudo_labels, keep, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (label, collect_mode, search, human_verifications, machine_verifications, keep, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(label) DO UPDATE SET
                     collect_mode = excluded.collect_mode,
                     search = excluded.search,
-                    include_training = excluded.include_training,
-                    auto_confirm = excluded.auto_confirm,
-                    pseudo_labels = excluded.pseudo_labels,
+                    human_verifications = excluded.human_verifications,
+                    machine_verifications = excluded.machine_verifications,
                     keep = excluded.keep,
                     updated_at = excluded.updated_at
                 """,
@@ -778,9 +812,8 @@ class Database:
                     label,
                     values.get("collect_mode") or "all",
                     int(values.get("search") or 0),
-                    int(values.get("include_training") if values.get("include_training") is not None else 1),
-                    int(values.get("auto_confirm") if values.get("auto_confirm") is not None else 1),
-                    int(values.get("pseudo_labels") if values.get("pseudo_labels") is not None else 1),
+                    values.get("human_verifications") or "train",
+                    values.get("machine_verifications") or "train",
                     keep,
                     time.time(),
                 ),
