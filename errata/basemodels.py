@@ -104,13 +104,14 @@ def _model_layout(row, path: str) -> str:
     return onnx_input_layout(path) or "nhwc"
 
 
-def activate_base_model(cfg: dict, db: Database, name: str) -> dict:
-    """Deploy an ONNX base model to Frigate.
+def deploy_onnx_to_frigate(cfg: dict, db: Database, onnx_path, labels_path, name: str,
+                           imgsz: int | None = None, layout: str = "nchw",
+                           reason: str = "pre-activate-base") -> dict:
+    """Stage an ONNX model + labelmap into published/ and point Frigate at it.
 
-    Copies the ONNX and its labelmap into the Frigate-visible published dir,
-    then patches the Frigate ``model:`` block (path/width/height/input_tensor/
-    labelmap_path/input_dtype/model_type) and restarts Frigate. Trained-from
-    base models (.pt) are train-only and cannot be deployed.
+    Patches the Frigate ``model:`` block (path/width/height/input_tensor/
+    labelmap_path/input_dtype/model_type), backs up the config, restarts, and
+    waits for Frigate to come back.
     """
     from .frigate_client import FrigateClient
     from .trainer import (
@@ -119,19 +120,13 @@ def activate_base_model(cfg: dict, db: Database, name: str) -> dict:
         patch_model_config,
     )
 
-    row = db.base_model_get(name)
-    if not row:
-        return {"ok": False, "error": f"base model not found: {name}"}
-    if row["format"] != "onnx":
-        return {"ok": False, "error": "only ONNX base models can be deployed (.pt is train-only)"}
-    src = Path(row["path"]) if row["path"] else None
-    if not src or not src.is_file():
-        return {"ok": False, "error": "base model file is missing"}
     safe_name = Path(name).name
     if safe_name != name:
         return {"ok": False, "error": "invalid base model name"}
-
-    labels_src = Path(row["labels"]) if row["labels"] else None
+    src = Path(onnx_path) if onnx_path else None
+    if not src or not src.is_file():
+        return {"ok": False, "error": "base model file is missing"}
+    labels_src = Path(labels_path) if labels_path else None
     if not labels_src or not labels_src.is_file():
         return {"ok": False, "error": "base model has no labelmap; cannot set labelmap_path"}
 
@@ -149,10 +144,10 @@ def activate_base_model(cfg: dict, db: Database, name: str) -> dict:
     except OSError as exc:
         return {"ok": False, "error": f"could not stage model into published/: {exc}"}
 
-    imgsz = row["imgsz"] or (onnx_input_size(str(dest)) or (None,))[0] or int(cfg["training"].get("imgsz", 320))
-    layout = _model_layout(row, str(dest))
+    if imgsz is None:
+        imgsz = (onnx_input_size(str(dest)) or (None,))[0] or int(cfg["training"].get("imgsz", 320))
 
-    backup_id, _ = backup_frigate_config(cfg, db, "pre-activate-base")
+    backup_id, _ = backup_frigate_config(cfg, db, reason)
     client = FrigateClient(cfg["frigate"])
     current = client.get_config_text()
     frigate_path = frigate_published_model_path(cfg, deploy_name)
@@ -169,9 +164,123 @@ def activate_base_model(cfg: dict, db: Database, name: str) -> dict:
     ready = client.wait_until_ready()
     db.kv_set("last_model_deployed", frigate_path)
     db.kv_set("last_model_deployed_at", str(time.time()))
-    logger.info("activated base model %s -> %s (layout %s, imgsz %s)", name, frigate_path, layout, imgsz)
+    logger.info("deployed base model %s -> %s (layout %s, imgsz %s)", name, frigate_path, layout, imgsz)
     return {"ok": True, "model": frigate_path, "layout": layout, "imgsz": imgsz,
             "frigate_ready": ready, "backup_id": backup_id}
+
+
+def activate_base_model(cfg: dict, db: Database, name: str) -> dict:
+    """Deploy an ONNX base model to Frigate.
+
+    Trained-from base models (.pt) are train-only and cannot be deployed; use
+    :func:`export_yolo_variant` to export a packaged YOLO variant first.
+    """
+    row = db.base_model_get(name)
+    if not row:
+        return {"ok": False, "error": f"base model not found: {name}"}
+    if row["format"] != "onnx":
+        return {"ok": False, "error": "only ONNX base models can be deployed (.pt is train-only)"}
+    src = Path(row["path"]) if row["path"] else None
+    if not src or not src.is_file():
+        return {"ok": False, "error": "base model file is missing"}
+    return deploy_onnx_to_frigate(
+        cfg, db, src, row["labels"], name,
+        imgsz=row["imgsz"], layout=_model_layout(row, str(src)),
+    )
+
+
+def _labels_from_names(names) -> list[str]:
+    """Turn an Ultralytics ``model.names`` mapping into an ordered label list."""
+    if isinstance(names, dict):
+        try:
+            return [str(names[i]) for i in sorted(names)]
+        except (TypeError, ValueError):
+            return [str(v) for _k, v in names.items()]
+    if names:
+        return [str(x) for x in names]
+    return []
+
+
+def export_yolo_variant(cfg: dict, db: Database, name: str, imgsz: int | None = None,
+                        on_progress=None) -> dict:
+    """Export a packaged YOLO ``.pt`` variant to ONNX and activate it in Frigate.
+
+    Downloads the pretrained COCO weights on demand, exports to ONNX, writes the
+    labelmap, registers a ``<name>-onnx`` base model, then deploys it.
+    """
+    from .trainer import ALL_MODELS, resolve_weights_path
+
+    def emit(update: dict) -> None:
+        if on_progress is None:
+            return
+        try:
+            on_progress(update)
+        except Exception:
+            logger.debug("export progress callback failed", exc_info=True)
+
+    if name not in ALL_MODELS:
+        return {"ok": False, "error": f"'{name}' is not a packaged YOLO variant"}
+    try:
+        from ultralytics import YOLO
+    except Exception as exc:
+        return {"ok": False, "error": f"ultralytics is not installed: {exc}"}
+
+    training = cfg["training"]
+    use_imgsz = int(imgsz or training.get("imgsz", 320))
+
+    emit({"phase": "downloading", "detail": f"loading {name} weights"})
+    weights = resolve_weights_path(name, training, db)
+    try:
+        model = YOLO(weights if Path(weights).is_file() else name)
+    except Exception as exc:
+        logger.exception("could not load YOLO weights for %s", name)
+        return {"ok": False, "error": f"could not load weights: {exc}"}
+
+    emit({"phase": "exporting", "detail": f"exporting {name} to ONNX at {use_imgsz}px"})
+    try:
+        onnx_path = Path(model.export(format="onnx", imgsz=use_imgsz))
+    except Exception as exc:
+        logger.exception("ONNX export failed for %s", name)
+        return {"ok": False, "error": f"export failed: {exc}"}
+
+    labels = _labels_from_names(getattr(model, "names", None))
+    if not labels:
+        return {"ok": False, "error": "could not determine class labels from the exported model"}
+
+    dest_dir = _yolo_dir(cfg)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    onnx_dest = dest_dir / f"{name}.onnx"
+    labels_dest = dest_dir / f"{name}.labels.txt"
+    try:
+        import shutil
+
+        if onnx_path.resolve() != onnx_dest.resolve():
+            shutil.copyfile(onnx_path, onnx_dest)
+        labels_dest.write_text("\n".join(labels) + "\n")
+    except OSError as exc:
+        return {"ok": False, "error": f"could not store export: {exc}"}
+
+    size = onnx_input_size(str(onnx_dest))
+    final_imgsz = size[0] if size else use_imgsz
+    layout = onnx_input_layout(str(onnx_dest)) or "nchw"
+    model_name = f"{name}-onnx"
+    db.base_model_insert(
+        name=model_name, source="yolo", fmt="onnx", path=str(onnx_dest),
+        imgsz=final_imgsz, labels=str(labels_dest), trainable=False,
+        meta=json.dumps({
+            "base": name, "imgsz": final_imgsz, "inputShape": layout,
+            "classes": len(labels), "exported_at": time.time(),
+        }),
+    )
+
+    emit({"phase": "deploying", "detail": f"activating {model_name} in Frigate"})
+    result = deploy_onnx_to_frigate(
+        cfg, db, onnx_dest, labels_dest, model_name, imgsz=final_imgsz, layout=layout,
+    )
+    if result.get("ok"):
+        result["name"] = model_name
+        result["classes"] = len(labels)
+    return result
 
 
 

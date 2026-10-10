@@ -140,6 +140,7 @@ def create_app(config: dict) -> FastAPI:
         return PlainTextResponse("ok")
 
     router = APIRouter(prefix=base)
+    deploy_lock = threading.Lock()
 
     def render(request: Request, template: str, ctx: dict, status_code: int = 200):
         ctx.update({"request": request, "base": base})
@@ -608,10 +609,53 @@ def create_app(config: dict) -> FastAPI:
 
     # ---- base models --------------------------------------------------------
 
+    base_state = {
+        "running": False,
+        "name": None,
+        "imgsz": None,
+        "phase": None,
+        "detail": "no export run yet",
+        "ok": None,
+        "started_at": None,
+        "finished_at": None,
+        "result": None,
+    }
+
+    def _base_worker(name: str, imgsz: int | None) -> None:
+        base_state.update({
+            "running": True, "name": name, "imgsz": imgsz, "phase": "starting",
+            "detail": f"preparing {name}", "ok": None, "started_at": time.time(),
+            "finished_at": None, "result": None,
+        })
+        try:
+            result = basemodels.export_yolo_variant(
+                config, db, name, imgsz=imgsz, on_progress=base_state.update,
+            )
+        except Exception as exc:
+            logger.exception("base model export failed")
+            base_state.update({
+                "running": False, "ok": False, "finished_at": time.time(),
+                "phase": "failed", "detail": str(exc), "result": None,
+            })
+            return
+        if result.get("ok"):
+            base_state.update({
+                "running": False, "ok": True, "finished_at": time.time(),
+                "phase": "done", "detail": f"activated {result.get('name') or name}",
+                "result": result,
+            })
+        else:
+            base_state.update({
+                "running": False, "ok": False, "finished_at": time.time(),
+                "phase": "failed", "detail": result.get("error") or "export failed",
+                "result": result,
+            })
+
     @router.get("/base-models", response_class=HTMLResponse)
     def base_models_page(request: Request, msg: str = ""):
         ctx = {
             "models": basemodels.list_base_models(db),
+            "base_state": base_state,
             "msg": msg,
         }
         return render(request, "base_models.html", ctx)
@@ -649,6 +693,39 @@ def create_app(config: dict) -> FastAPI:
         else:
             msg = f"Activate failed: {result.get('error')}"
         return RedirectResponse(f"{base}/base-models?msg={quote(msg)}", status_code=303)
+
+    @router.post("/base-models/{name}/export-activate")
+    def base_models_export_activate(name: str, imgsz: int = Form(0)):
+        from .trainer import ALL_MODELS, IMGSZ_CHOICES
+
+        if name not in ALL_MODELS:
+            return RedirectResponse(
+                f"{base}/base-models?msg={quote(f'{name} is not a packaged YOLO variant')}",
+                status_code=303,
+            )
+        if importlib.util.find_spec("ultralytics") is None:
+            return RedirectResponse(
+                f"{base}/base-models?msg={quote('ultralytics is not installed in this container')}",
+                status_code=303,
+            )
+        if train_state["running"] or base_state["running"]:
+            return RedirectResponse(
+                f"{base}/base-models?msg={quote('another export or training run is already in progress')}",
+                status_code=303,
+            )
+        chosen = imgsz if imgsz in IMGSZ_CHOICES else None
+        threading.Thread(
+            target=_base_worker, args=(name, chosen),
+            name="errata-base-export", daemon=True,
+        ).start()
+        return RedirectResponse(
+            f"{base}/base-models?msg={quote(f'Exporting {name} to ONNX and activating in Frigate…')}",
+            status_code=303,
+        )
+
+    @router.get("/api/base-models/status")
+    def base_models_status():
+        return JSONResponse(base_state)
 
     # ---- snapshots / crop preview ------------------------------------------
 
@@ -1039,8 +1116,6 @@ def create_app(config: dict) -> FastAPI:
             },
             status_code=202,
         )
-
-    deploy_lock = threading.Lock()
 
     @router.get("/api/dataset/stats")
     def api_dataset_stats():

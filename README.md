@@ -87,7 +87,9 @@ Frigate API ──▶ harvester ──▶ SQLite ──▶ analyzer ──▶ re
 - In-browser box editor + **training-crop preview** (the exact crop the model
   learns from; Edit opens the full frame to re-crop)
 - **Base models**: packaged YOLO 9/11/12 variants, uploads, and one-click
-  Frigate+ model import (deploy-only)
+  Frigate+ model import (deploy-only). Vanilla YOLO variants get an
+  **Export & Activate** button that exports the pretrained COCO weights to ONNX
+  and deploys them as Frigate's detector.
 - **Reset / start over** — wipe all learned data and controls with one action
 - Three training paths: in-app button, CLI, or a Mac/Colab kit
 - Optional automatic deployment of the trained model into Frigate's config

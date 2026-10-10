@@ -228,6 +228,27 @@ class TestBaseModels(Base):
         self.assertIn("input_dtype: float", new)
         self.assertIn("model_type: yolo-generic", new)
 
+    def test_labels_from_names_orders_by_index(self):
+        self.assertEqual(
+            basemodels._labels_from_names({2: "deer", 0: "person", 1: "car"}),
+            ["person", "car", "deer"],
+        )
+        self.assertEqual(basemodels._labels_from_names(None), [])
+
+    def test_export_activate_rejects_non_variant(self):
+        from errata import scheduler as sched_mod
+        from errata import webapp as webapp_mod
+        from starlette.testclient import TestClient
+
+        sched_mod.Scheduler.start = lambda self: None
+        sched_mod.Scheduler.stop = lambda self: None
+        app = webapp_mod.create_app(self.cfg)
+        with TestClient(app) as c:
+            r = c.post("/errata/base-models/not-a-model/export-activate", data={"imgsz": 320},
+                       follow_redirects=False)
+        self.assertEqual(r.status_code, 303)
+        self.assertIn("not%20a%20packaged%20YOLO%20variant", r.headers["location"])
+
     def test_base_models_not_pruned_by_keep_versions(self):
         self.db.base_model_insert("custom", "upload", "pt", "/x/custom.pt")
         # keep_versions only touches published errata_*.onnx; base table intact

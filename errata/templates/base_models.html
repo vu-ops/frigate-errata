@@ -7,6 +7,8 @@
   stored separately from published models and never count against the model
   retention limit. YOLO variants (and uploaded <code>.pt</code>) are trainable;
   imported Frigate+ models and uploaded <code>.onnx</code> are deploy-only.
+  Use <strong>Export &amp; Activate</strong> on a YOLO variant to export its
+  pretrained COCO weights to ONNX and deploy that as Frigate's detector.
 </div>
 
 <div class="section-title">Import a Frigate+ model</div>
@@ -25,6 +27,7 @@
 </form>
 
 <div class="section-title">Registered base models</div>
+<div id="base-progress" class="msg" hidden></div>
 <table>
   <tr><th>Name</th><th>Source</th><th>Format</th><th>Trainable</th><th>imgsz</th><th>Path</th><th></th></tr>
   {% for m in models %}
@@ -36,6 +39,15 @@
     <td>{{ m.imgsz or '—' }}</td>
     <td class="meta">{{ m.path or '(downloaded on demand)' }}</td>
     <td>
+      {% if m.source == 'yolo' and m.format == 'pt' %}
+      <form method="post" action="{{ base }}/base-models/{{ m.name }}/export-activate" style="display:inline"
+            onsubmit="return confirm('Export {{ m.name }} to ONNX and activate it in Frigate?\n\nThis downloads the pretrained weights, exports them, and replaces Frigate\'s current detector (a config backup is saved and Frigate restarts).{% if m.name.startswith('yolo12') %} YOLO12 is untested in Frigate.{% endif %}')">
+        <select name="imgsz" style="width:auto" aria-label="export image size">
+          {% for s in imgsz_choices %}<option value="{{ s }}" {% if s == default_imgsz %}selected{% endif %}>{{ s }}px</option>{% endfor %}
+        </select>
+        <button class="primary" type="submit">Export &amp; Activate</button>
+      </form>
+      {% endif %}
       {% if m.format == 'onnx' and m.labels %}
       <form method="post" action="{{ base }}/base-models/{{ m.name }}/activate" style="display:inline"
             onsubmit="return confirm('Activate {{ m.name }} in Frigate?\n\nA config backup is saved, then Frigate is pointed at this model and restarts (detection pauses briefly).')">
@@ -51,4 +63,38 @@
   </tr>
   {% endfor %}
 </table>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var BASE = '{{ base }}';
+  var box = document.getElementById('base-progress');
+  if (!box) return;
+  var sawRunning = false;
+  function disableButtons(on) {
+    document.querySelectorAll('table button[type="submit"]').forEach(function (b) { b.disabled = on; });
+  }
+  function poll() {
+    fetch(BASE + '/api/base-models/status').then(function (r) { return r.json(); }).then(function (s) {
+      if (!s) return;
+      if (s.running) {
+        sawRunning = true;
+        box.hidden = false;
+        box.textContent = 'Exporting ' + (s.name || '') + ': ' + (s.phase || '') + ' — ' + (s.detail || '');
+        disableButtons(true);
+        setTimeout(poll, 2000);
+      } else if (sawRunning && s.ok === true) {
+        box.hidden = false;
+        box.textContent = 'Done: ' + (s.detail || 'activated');
+        setTimeout(function () { location.reload(); }, 1200);
+      } else if (sawRunning && s.ok === false) {
+        box.hidden = false;
+        box.textContent = 'Failed: ' + (s.detail || 'unknown error');
+        disableButtons(false);
+      }
+    }).catch(function () { setTimeout(poll, 3000); });
+  }
+  if ({{ 'true' if base_state.running else 'false' }}) { poll(); }
+})();
+</script>
 {% endblock %}
