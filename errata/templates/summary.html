@@ -138,8 +138,9 @@
           ? esc(tds.images.total + ' img · ' + tds.objects.total + ' obj · ' + tds.pseudo.images + ' pseudo')
           : '<span class="meta">not recorded</span>';
         html += '<tr><td>' + fmt(m.created_at) + '</td><td>' + esc(m.name) + (active ? ' <strong>(active)</strong>' : '') +
+          ((m.missing && m.missing.length) ? ' <span class="badge oversized" title="missing labels: ' + esc(m.missing.join(', ')) + '">⚠ ' + m.missing.length + ' missing</span>' : '') +
           '</td><td>' + esc(m.model_type || '—') + '</td><td class="n">' + (m.training_count == null ? '—' : m.training_count) + '</td><td class="n">' + fmtDur(m.duration_seconds) + '</td><td>' + trained + '</td><td class="n">' + m.size_mb + ' MB</td>' +
-          '<td>' + (active ? '' : '<button data-model="' + esc(m.name) + '" class="act">Activate</button>') + '</td></tr>';
+          '<td>' + (active ? '' : '<button data-model="' + esc(m.name) + '" data-missing="' + esc((m.missing || []).join(',')) + '" class="act">Activate</button>') + '</td></tr>';
       }
       html += '</table>';
       if (d.backups && d.backups.length) {
@@ -157,8 +158,12 @@
       box.innerHTML = html;
       Array.prototype.forEach.call(box.querySelectorAll('button.act'), function(btn) {
         btn.onclick = function() {
+          var miss = (btn.getAttribute('data-missing') || '').split(',').filter(Boolean);
+          var warn = miss.length
+            ? '\n\nWARNING: this model has no ' + miss.join(', ') + ' — those objects will NOT be detected.'
+            : '';
           deploy('/api/models/activate', { model: btn.getAttribute('data-model') },
-            'Activate ' + btn.getAttribute('data-model') + '?\n\nA config backup is saved first, then the Frigate config is updated and Frigate restarts (detection pauses briefly).');
+            'Activate ' + btn.getAttribute('data-model') + '?' + warn + '\n\nA config backup is saved first, then the Frigate config is updated and Frigate restarts (detection pauses briefly).');
         };
       });
       Array.prototype.forEach.call(box.querySelectorAll('button.rev'), function(btn) {

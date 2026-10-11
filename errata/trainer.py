@@ -59,7 +59,7 @@ def _select_pseudo_labels(cfg: dict, db: Database, class_map: dict) -> list:
         label = row["label"]
         if label not in class_map:
             continue
-        if (controls.get(label, {}) or {}).get("machine_verifications", "train") != "train":
+        if (controls.get(label, {}) or {}).get("machine_verifications", "train") not in ("train", "train_only"):
             continue
         if not is_plausible_box(row["box"]):
             continue
@@ -82,9 +82,9 @@ def _select_pseudo_labels(cfg: dict, db: Database, class_map: dict) -> list:
 
 
 def _label_trains(ctl: dict) -> bool:
-    """A label is a trained class when either verification source is set to train."""
+    """A label is a trained class when either verification source feeds training."""
     return (ctl.get("human_verifications", "train") == "train"
-            or ctl.get("machine_verifications", "train") == "train")
+            or ctl.get("machine_verifications", "train") in ("train", "train_only"))
 
 
 def trained_class_map(cfg: dict, db: Database) -> dict:
@@ -542,18 +542,42 @@ def activate_model(cfg: dict, db: Database, model_name: str) -> dict:
     safe_name = Path(model_name).name
     if safe_name != model_name or not safe_name.endswith(".onnx"):
         return {"ok": False, "error": "invalid model name"}
-    candidate = Path(cfg["training"]["publish_dir"]) / "published" / safe_name
+    publish_dir = Path(cfg["training"]["publish_dir"]) / "published"
+    candidate = publish_dir / safe_name
     if not candidate.is_file():
         return {"ok": False, "error": f"model not found: {safe_name}"}
+    size = model_imgsz(db, safe_name)
+    if size is None:
+        size = int(cfg["training"].get("imgsz", 320))
+
+    # Attach the model's own labelmap (and yolo-generic settings) so a trained
+    # model never inherits the previous model's labelmap. Refuse on a mismatch.
+    extra: dict = {}
+    labels_file = publish_dir / f"{candidate.stem}.labels.txt"
+    if labels_file.is_file():
+        from .basemodels import onnx_output_classes
+
+        labels = [l for l in labels_file.read_text().split("\n") if l.strip()]
+        nc = onnx_output_classes(str(candidate))
+        if nc is not None and labels and nc != len(labels):
+            return {
+                "ok": False,
+                "error": f"label/class mismatch: model outputs {nc} class(es) but "
+                         f"{labels_file.name} has {len(labels)}",
+            }
+        extra = {
+            "labelmap_path": frigate_published_model_path(cfg, labels_file.name),
+            "input_dtype": "float",
+            "model_type": "yolo-generic",
+        }
+
     backup_id, backup_path = backup_frigate_config(cfg, db, "pre-activate")
     client = FrigateClient(cfg["frigate"])
     current = client.get_config_text()
     frigate_path = frigate_published_model_path(cfg, safe_name)
-    size = model_imgsz(db, safe_name)
-    if size is None:
-        size = int(cfg["training"].get("imgsz", 320))
     patched, changed = patch_model_config(
-        current, frigate_path, width=size, height=size, input_tensor="nhwc"
+        current, frigate_path, width=size, height=size, input_tensor="nhwc",
+        extra=extra or None,
     )
     if not changed:
         return {
@@ -578,6 +602,17 @@ def activate_model(cfg: dict, db: Database, model_name: str) -> dict:
         backup_path,
     )
     return {"ok": True, "model": frigate_path, "frigate_ready": ready, "backup_id": backup_id}
+
+
+def missing_tracked_labels(cfg: dict, model_name: str) -> list[str]:
+    """Tracked labels absent from a published model's own labelmap (sorted)."""
+    publish_dir = Path(cfg["training"]["publish_dir"]) / "published"
+    labels_file = publish_dir / f"{Path(model_name).stem}.labels.txt"
+    if not labels_file.is_file():
+        return []
+    present = {l.strip() for l in labels_file.read_text().split("\n") if l.strip()}
+    track = list((cfg.get("labels", {}) or {}).get("track", []) or [])
+    return sorted(l for l in track if l not in present)
 
 
 def restore_backup(cfg: dict, db: Database, backup_id: int) -> dict:
@@ -647,6 +682,9 @@ def publish_model(cfg: dict, db: Database, onnx_path: Path, training_count: int,
     if not labels:
         raise ValueError("refusing to publish a model with zero classes; enable a label first")
     (publish_dir / "labels.txt").write_text("\n".join(labels) + "\n")
+    # Per-model labelmap so an older model always deploys with its own classes
+    # (the shared labels.txt above is overwritten on every run).
+    (publish_dir / f"{dest.stem}.labels.txt").write_text("\n".join(labels) + "\n")
     (publish_dir / "metrics.json").write_text(
         json.dumps({"created_at": time.time(), **metrics}, indent=2) + "\n"
     )
@@ -666,6 +704,7 @@ def update_frigate_config(
     model_path: str,
     width: int | None = None,
     height: int | None = None,
+    labelmap_path: str | None = None,
 ) -> bool:
     client = FrigateClient(cfg["frigate"])
     try:
@@ -673,8 +712,11 @@ def update_frigate_config(
     except Exception:
         logger.exception("failed to fetch frigate config")
         return False
+    extra = None
+    if labelmap_path:
+        extra = {"labelmap_path": labelmap_path, "input_dtype": "float", "model_type": "yolo-generic"}
     patched, changed = patch_model_config(
-        current, model_path, width=width, height=height, input_tensor="nhwc"
+        current, model_path, width=width, height=height, input_tensor="nhwc", extra=extra
     )
     if not changed:
         logger.error("could not find model path in frigate config, aborting update")
@@ -865,7 +907,9 @@ def run_training(
     if training["auto_update_frigate_config"]:
         backup_frigate_config(cfg, db, "pre-autoupdate")
         update_frigate_config(
-            cfg, db, frigate_published_model_path(cfg, dest.name), width=use_imgsz, height=use_imgsz
+            cfg, db, frigate_published_model_path(cfg, dest.name),
+            width=use_imgsz, height=use_imgsz,
+            labelmap_path=frigate_published_model_path(cfg, f"{dest.stem}.labels.txt"),
         )
     return {"model": str(dest), "device": device, "dataset": dataset}
 

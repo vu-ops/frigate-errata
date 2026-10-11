@@ -408,10 +408,10 @@ else to do. Otherwise create a wrapper unit or just use
 | `POST /errata/api/run-now` | Trigger an immediate harvest+analyze cycle (also a "Fetch latest" button in the header) |
 | `POST /errata/api/train` | Start a training run in the container background (also a "Train" button in the header). Re-exports the dataset first, then trains with the device from `training.device` (xpu with CPU fallback). 409 if already running, 503 if the image lacks ultralytics |
 | `GET /errata/api/models` | List published models, the model Frigate is currently serving, and config backups |
-| `POST /errata/api/models/activate` | Body `{"model": "errata_<stamp>.onnx"}`. Backs up the Frigate config, patches the model path via the Frigate API, saves with `save_option=restart`, waits for Frigate to return |
+| `POST /errata/api/models/activate` | Body `{"model": "errata_<stamp>.onnx"}`. Backs up the Frigate config, points `model.path` at the published model, sets `labelmap_path` to that model's own `errata_<stamp>.labels.txt` plus `input_dtype`/`model_type`, saves with `save_option=restart`, waits for Frigate to return. Refuses on a class-count/labelmap mismatch; the UI warns when the model omits labels Frigate is configured to track |
 | `POST /errata/api/models/backups/<id>/revert` | Restore a previous Frigate config backup (a fresh backup of the current config is taken first), then restart Frigate |
 | `GET /errata/api/dataset/stats` | Summarize the on-disk YOLO dataset (human/pseudo images and objects, backgrounds, per-class train/val counts); the summary page renders this and warns when unexported corrections are not yet in the dataset |
-| `GET /errata/controls` / `POST /errata/controls` | Per-label controls. UI names: Collection (`all`=Human + Machine Review, `review_only`=Human Review Only, `off`=Monitor Only (Ignore)), Frigate Description Search (`search`), Human Verifications and Machine Verifications (each `collect`=Collect Only \| `train`=Collect and Train; the count shown is the images that source contributes and *Collect and Train* is disabled at 0), Snapshot Limit (`keep`, blank = global `review.auto_keep_per_label`, 0 = keep forever). A label is trained when either verification source is `train`. Each column header fills every row client-side before saving |
+| `GET /errata/controls` / `POST /errata/controls` | Per-label controls. UI names: Collection (`all`=Human + Machine Review, `review_only`=Human Review Only, `off`=Monitor Only (Ignore)), Frigate Description Search (`search`), Human Verifications (`collect`=Collect Only \| `train`=Collect and Train), Machine Verifications (`collect` \| `train` \| `train_only`=Train Only, which keeps the existing confirmed events as pseudo-labels but sends new clean events to Ignored), Snapshot Limit (`keep`, blank = global `review.auto_keep_per_label`, 0 = keep forever). Each verification column also has a **Purge Data…** option: on save it deletes that label's data for that source (human = corrections; machine = auto-confirmed events + snapshots) and resets the column to `collect` — it is not a stored value. A label is trained when either source feeds training. Counts show images contributed; *Collect and Train* / *Train Only* is disabled at 0. Each column header fills every row client-side before saving |
 | `POST /errata/brand/{id}` / `POST /errata/brands/bulk` | Confirm/reject a brand review item (metadata only) |
 | `GET /errata/api/snapshots/{id}/crop.jpg` | The actual training crop for an event (matches the trainer's region crop) |
 | `GET /errata/api/snapshots/{id}/preview.jpg` | Wider-context crop used by the review grid (scale `review.preview_scale`, rendered at `review.preview_imgsz`). Add `?raw=1` to omit the baked-in detector box (the GenAI panel draws its own Frigate/GenAI overlays) |
@@ -479,7 +479,7 @@ SQLite, WAL mode.
   `score`, `status` (`pending|confirmed|rejected`), `reviewed_at`, `created_at`.
 - **label_settings** — per-label controls: `label`, `collect_mode`, `search`,
   `human_verifications` (`collect|train`), `machine_verifications`
-  (`collect|train`), `keep`, `updated_at`.
+  (`collect|train|train_only`), `keep`, `updated_at`.
 - **events.genai** — per-event JSON cache of GenAI Help results keyed
   `kind|expected|model`; deleted with the event.
 - **base_models** — `name`, `source` (`yolo|frigate_plus|upload`), `format`

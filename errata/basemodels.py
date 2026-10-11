@@ -92,6 +92,25 @@ def onnx_input_layout(path: str) -> str | None:
     return None
 
 
+def onnx_output_classes(path: str) -> int | None:
+    """Return the class count (channels - 4) of a yolo-generic ONNX output, or None."""
+    try:
+        import onnx
+
+        model = onnx.load(path)
+        if not model.graph.output:
+            return None
+        dims = [d.dim_value for d in model.graph.output[0].type.tensor_type.shape.dim]
+        if len(dims) != 3:
+            return None
+        channels = dims[1] if dims[1] > 0 else dims[2]
+        if channels > 4:
+            return int(channels) - 4
+    except Exception:
+        logger.exception("could not read ONNX output shape from %s", path)
+    return None
+
+
 def _model_layout(row, path: str) -> str:
     meta = {}
     try:

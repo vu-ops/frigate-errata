@@ -222,6 +222,12 @@ class Analyzer:
 
         if reason is None:
             if machine_review:
+                # Machine Verifications "Train Only" freezes the set: keep the
+                # already-confirmed events for training, but stop accepting new
+                # machine verifications (route them to ignored).
+                if ctl.get("machine_verifications", "train") == "train_only":
+                    self.db.set_status(row["id"], "ignored", reviewed=True)
+                    return "ignored"
                 self.db.set_status(row["id"], "confirmed")
                 return "confirmed"
             # Machine review disabled for this label (Human Review Only):

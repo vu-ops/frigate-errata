@@ -2,6 +2,14 @@
 {% block title %}Errata — Controls{% endblock %}
 {% block content %}
 {% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+{% if self_training %}
+<div class="msg" style="background:#2b1d1d;border-color:#7a2e2e;">
+  <strong>Self-training notice:</strong> the live Frigate detector is one of Errata's
+  own models while Machine Verifications are enabled — new machine verifications would be
+  the model labeling its own output. Prefer human verifications, or run a different
+  detector (e.g. Frigate+) while collecting machine data.
+</div>
+{% endif %}
 <form method="post" action="{{ base }}/controls">
 <table>
   <tr>
@@ -33,6 +41,7 @@
         <option value="">apply to all…</option>
         <option value="collect">Collect Only</option>
         <option value="train">Collect and Train</option>
+        <option value="train_only">Train Only</option>
       </select>
     </th>
     <th>Snapshot Limit
@@ -64,6 +73,7 @@
       <select name="human_verifications_{{ label }}">
         <option value="collect" {% if c.human_verifications == 'collect' %}selected{% endif %}>Collect Only</option>
         <option value="train" {% if c.human_verifications == 'train' %}selected{% endif %} {% if n_human == 0 %}disabled{% endif %}>Collect and Train</option>
+        <option value="purge">Purge Data…</option>
       </select>
       <span class="meta">({{ n_human }})</span>
       {% endif %}
@@ -75,6 +85,8 @@
       <select name="machine_verifications_{{ label }}">
         <option value="collect" {% if c.machine_verifications == 'collect' %}selected{% endif %}>Collect Only</option>
         <option value="train" {% if c.machine_verifications == 'train' %}selected{% endif %} {% if n_machine == 0 %}disabled{% endif %}>Collect and Train</option>
+        <option value="train_only" {% if c.machine_verifications == 'train_only' %}selected{% endif %} {% if n_machine == 0 %}disabled{% endif %}>Train Only</option>
+        <option value="purge">Purge Data…</option>
       </select>
       <span class="meta">({{ n_machine }})</span>
       {% endif %}
@@ -120,6 +132,22 @@ if (bulkKeep) {
     if (bulkKeep.value === '') return;
     document.querySelectorAll('input[name^="keep_"]').forEach(function (inp) { inp.value = bulkKeep.value; });
     bulkKeep.value = '';
+  });
+}
+var cform = document.querySelector('form[action$="/controls"]');
+if (cform) {
+  cform.addEventListener('submit', function (e) {
+    var picks = [];
+    cform.querySelectorAll('select[name^="human_verifications_"], select[name^="machine_verifications_"]').forEach(function (s) {
+      if (s.value !== 'purge') return;
+      var source = s.name.indexOf('machine_') === 0 ? 'machine' : 'human';
+      var label = s.name.replace(/^(human_verifications_|machine_verifications_)/, '');
+      picks.push('• ' + label + ' (' + source + ')');
+    });
+    if (picks.length && !confirm('Purge Data for:\n\n' + picks.join('\n') +
+        '\n\nThis deletes the stored data and sets Collect Only. This cannot be undone.')) {
+      e.preventDefault();
+    }
   });
 }
 </script>

@@ -114,10 +114,15 @@ Frigate API ──▶ harvester ──▶ SQLite ──▶ analyzer ──▶ re
 
 Per-label controls live on the **Controls** page (Collection, Frigate Description
 Search, Human Verifications, Machine Verifications, Snapshot Limit). *Human
-Verifications* and *Machine Verifications* are each **Collect Only** or **Collect
-and Train**; the number shown is how many images that source currently
-contributes, and *Collect and Train* is disabled when the count is 0. A label is
-trained when either source is *Collect and Train*. A candidate hit always
+Verifications* is **Collect Only** or **Collect and Train**; *Machine
+Verifications* is **Collect Only**, **Collect and Train**, or **Train Only**
+(pseudo-label the existing machine-confirmed events but stop accepting new ones —
+new clean events go to Ignored). The number shown is how many images that source
+contributes, and *Collect and Train* / *Train Only* is disabled when the count is
+0. Each column also offers **Purge Data…**, a one-time, per-label action that
+deletes that source's stored data and resets the column to Collect Only (the
+global **Reset** on the Summary page is unchanged). A label is trained when either
+source feeds training. A candidate hit always
 surfaces, overriding the detected label's auto-confirm.
 
 ## Reset / start over

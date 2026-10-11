@@ -490,6 +490,20 @@ class Database:
             )
             return cur.rowcount
 
+    def delete_corrections_for_label(self, label: str) -> int:
+        with self.connect() as conn:
+            cur = conn.execute("DELETE FROM corrections WHERE correct_label = ?", (label,))
+            return cur.rowcount
+
+    def machine_events_for_label(self, label: str) -> list[sqlite3.Row]:
+        """Auto-confirmed events for a label that have no human correction."""
+        with self.connect() as conn:
+            return conn.execute(
+                "SELECT e.* FROM events e WHERE e.label = ? AND e.status = 'confirmed' "
+                "AND NOT EXISTS (SELECT 1 FROM corrections c WHERE c.event_id = e.id)",
+                (label,),
+            ).fetchall()
+
     def latest_correction(self, event_id: str) -> sqlite3.Row | None:
         with self.connect() as conn:
             return conn.execute(

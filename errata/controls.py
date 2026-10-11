@@ -18,7 +18,8 @@ DISABLED_DEFAULTS = {
 
 _BOOL_FIELDS = ("search",)
 _VALID_COLLECT = ("all", "review_only", "off")
-_VALID_VERIFY = ("collect", "train")
+_VALID_HUMAN = ("collect", "train")
+_VALID_MACHINE = ("collect", "train", "train_only")
 
 
 def _normalize(settings: dict) -> dict:
@@ -26,8 +27,12 @@ def _normalize(settings: dict) -> dict:
     out["collect_mode"] = out.get("collect_mode") if out.get("collect_mode") in _VALID_COLLECT else "all"
     for field in _BOOL_FIELDS:
         out[field] = bool(out.get(field))
-    for field in ("human_verifications", "machine_verifications"):
-        out[field] = out.get(field) if out.get(field) in _VALID_VERIFY else "train"
+    out["human_verifications"] = (
+        out.get("human_verifications") if out.get("human_verifications") in _VALID_HUMAN else "train"
+    )
+    out["machine_verifications"] = (
+        out.get("machine_verifications") if out.get("machine_verifications") in _VALID_MACHINE else "train"
+    )
     keep = out.get("keep")
     try:
         out["keep"] = int(keep) if keep not in (None, "") else None

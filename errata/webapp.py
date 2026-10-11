@@ -560,6 +560,34 @@ def create_app(config: dict) -> FastAPI:
 
     # ---- per-label controls -------------------------------------------------
 
+    def _errata_model_active() -> bool:
+        try:
+            from .frigate_client import FrigateClient
+            from .trainer import current_model_path
+
+            path = current_model_path(FrigateClient(config["frigate"]).get_config_text())
+            return bool(path) and Path(path).name.startswith("errata_")
+        except Exception:
+            return False
+
+    def _purge_label_source(label: str, source: str) -> str:
+        if source == "human":
+            n = db.delete_corrections_for_label(label)
+            return f"purged {n} human correction(s)"
+        rows = db.machine_events_for_label(label)
+        ids = []
+        for row in rows:
+            path = row["snapshot_path"]
+            if path:
+                try:
+                    Path(path).unlink(missing_ok=True)
+                except OSError:
+                    logger.exception("failed to delete snapshot %s", path)
+            ids.append(row["id"])
+        if ids:
+            db.delete_events(ids)
+        return f"purged {len(ids)} machine event(s)"
+
     @router.get("/controls", response_class=HTMLResponse)
     def controls_page(request: Request, msg: str = ""):
         from .trainer import verification_counts
@@ -569,6 +597,10 @@ def create_app(config: dict) -> FastAPI:
         counts = verification_counts(config, db)
         for label in all_labels:
             counts.setdefault(label, {"human": 0, "machine": 0})
+        machine_on = any(
+            (c or {}).get("machine_verifications") in ("train", "train_only")
+            for c in controls.values()
+        )
         ctx = {
             "controls": controls,
             "labels": labels,
@@ -576,6 +608,7 @@ def create_app(config: dict) -> FastAPI:
             "counts": counts,
             "global_keep": int(config["review"].get("auto_keep_per_label", 150)),
             "default_disabled": bool(db.kv_get(CONTROLS_DEFAULT_DISABLED_KEY) == "1"),
+            "self_training": machine_on and _errata_model_active(),
             "msg": msg,
         }
         return render(request, "controls.html", ctx)
@@ -584,6 +617,7 @@ def create_app(config: dict) -> FastAPI:
     async def controls_save(request: Request):
         form = await request.form()
         all_labels = list(dict.fromkeys(labels + attribute_labels))
+        purged: list[str] = []
         for label in all_labels:
             if f"present_{label}" not in form:
                 continue
@@ -595,17 +629,26 @@ def create_app(config: dict) -> FastAPI:
                     keep = max(0, int(str(raw_keep)))
                 except ValueError:
                     raise HTTPException(status_code=400, detail=f"invalid snapshot limit for '{label}'")
+            human = str(form.get(f"human_verifications_{label}", "collect"))
+            machine = str(form.get(f"machine_verifications_{label}", "collect"))
+            if human == "purge":
+                purged.append(f"{label} ({_purge_label_source(label, 'human')})")
+                human = "collect"
+            if machine == "purge":
+                purged.append(f"{label} ({_purge_label_source(label, 'machine')})")
+                machine = "collect"
             set_control(
                 config, db, label,
                 collect_mode=mode,
                 search=form.get(f"search_{label}") is not None,
-                human_verifications=str(form.get(f"human_verifications_{label}", "collect")),
-                machine_verifications=str(form.get(f"machine_verifications_{label}", "collect")),
+                human_verifications=human,
+                machine_verifications=machine,
                 keep=keep,
             )
-        return RedirectResponse(
-            f"{base}/controls?msg={quote('Label controls saved.')}", status_code=303
-        )
+        msg = "Label controls saved."
+        if purged:
+            msg = "Label controls saved. Purged: " + ", ".join(purged) + "."
+        return RedirectResponse(f"{base}/controls?msg={quote(msg)}", status_code=303)
 
     # ---- base models --------------------------------------------------------
 
@@ -653,8 +696,16 @@ def create_app(config: dict) -> FastAPI:
 
     @router.get("/base-models", response_class=HTMLResponse)
     def base_models_page(request: Request, msg: str = ""):
+        from .trainer import missing_tracked_labels
+
+        models = basemodels.list_base_models(db)
+        missing = {}
+        for m in models:
+            if m.get("format") == "onnx" and m.get("labels"):
+                missing[m["name"]] = missing_tracked_labels(config, m["name"])
         ctx = {
-            "models": basemodels.list_base_models(db),
+            "models": models,
+            "missing": missing,
             "base_state": base_state,
             "msg": msg,
         }
@@ -1129,7 +1180,7 @@ def create_app(config: dict) -> FastAPI:
     @router.get("/api/models")
     def api_models():
         from .frigate_client import FrigateClient
-        from .trainer import current_model_path, list_published_models
+        from .trainer import current_model_path, list_published_models, missing_tracked_labels
 
         active = ""
         error = None
@@ -1140,6 +1191,7 @@ def create_app(config: dict) -> FastAPI:
         versions = {Path(v["model_path"]).name: v for v in db.model_versions(limit=50)}
         models = list_published_models(config)
         for m in models:
+            m["missing"] = missing_tracked_labels(config, m["name"])
             v = versions.get(m["name"])
             if v:
                 m["training_count"] = v["training_count"]

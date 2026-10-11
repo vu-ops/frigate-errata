@@ -449,5 +449,63 @@ class TestPreviewGeometry(unittest.TestCase):
         self.assertEqual(box_in_crop(box, x0, y0, side, *img.size), box_c)
 
 
+class TestVerifications(Base):
+    def test_train_only_stops_new_machine_events(self):
+        self.add_event("e1", "car", description="a car")
+        set_control(self.cfg, self.db, "car", collect_mode="all", machine_verifications="train_only")
+        Analyzer(self.cfg, self.db).run()
+        self.assertEqual(self.db.get_event("e1")["status"], "ignored")
+
+    def test_train_only_is_trainable_and_pseudo(self):
+        self.add_event("e1", "car", description="a car")
+        self.db.set_status("e1", "confirmed")
+        set_control(self.cfg, self.db, "car", machine_verifications="train_only")
+        self.assertIn("car", trainer.trained_class_map(self.cfg, self.db))
+        pseudo = trainer._select_pseudo_labels(self.cfg, self.db, {"car": 0})
+        self.assertEqual([r["id"] for r in pseudo], ["e1"])
+
+    def test_missing_tracked_labels(self):
+        pub = Path(self.cfg["training"]["publish_dir"]) / "published"
+        pub.mkdir(parents=True, exist_ok=True)
+        (pub / "errata_test.onnx").write_bytes(b"")
+        (pub / "errata_test.labels.txt").write_text("cat\n")
+        missing = trainer.missing_tracked_labels(self.cfg, "errata_test.onnx")
+        self.assertIn("car", missing)
+        self.assertNotIn("cat", missing)
+
+
+class TestPurge(Base):
+    def _client(self):
+        from errata import scheduler as sched_mod
+        from errata import webapp as webapp_mod
+        from starlette.testclient import TestClient
+
+        sched_mod.Scheduler.start = lambda self: None
+        sched_mod.Scheduler.stop = lambda self: None
+        return TestClient(webapp_mod.create_app(self.cfg))
+
+    def test_human_purge_deletes_corrections(self):
+        self.add_event("e1", "cat", correct="cat")
+        self.assertEqual(self.db.corrections_count(), 1)
+        with self._client() as c:
+            r = c.post("/errata/controls", data={
+                "present_cat": "1", "collect_mode_cat": "all",
+                "human_verifications_cat": "purge", "machine_verifications_cat": "collect",
+            }, follow_redirects=False)
+        self.assertEqual(r.status_code, 303)
+        self.assertEqual(self.db.corrections_count(), 0)
+        self.assertEqual(effective_for_label(self.cfg, self.db, "cat")["human_verifications"], "collect")
+
+    def test_machine_purge_deletes_confirmed_events(self):
+        self.add_event("e1", "car", description="a car")
+        self.db.set_status("e1", "confirmed")
+        with self._client() as c:
+            c.post("/errata/controls", data={
+                "present_car": "1", "collect_mode_car": "all",
+                "human_verifications_car": "collect", "machine_verifications_car": "purge",
+            })
+        self.assertIsNone(self.db.get_event("e1"))
+
+
 if __name__ == "__main__":
     unittest.main()
