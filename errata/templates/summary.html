@@ -178,11 +178,21 @@
   }
   function deploy(url, body, confirmMsg) {
     if (!confirm(confirmMsg)) return;
+    postDeploy(url, body);
+  }
+  function postDeploy(url, body) {
     fetch(base + url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     }).then(function(r) { return r.json(); }).then(function(res) {
+      if (res && res.needs_confirm && res.missing && res.missing.length) {
+        if (confirm('This model is missing: ' + res.missing.join(', ') +
+            '\n\nThose objects will NOT be detected if you deploy it.\n\nDeploy anyway?')) {
+          postDeploy(url, Object.assign({}, body, { force: true }));
+        }
+        return;
+      }
       alert(res.ok ? ('Done: ' + (res.model || res.restored_from || '')) : ('Failed: ' + (res.error || 'unknown error')));
       load();
     }).catch(function(e) { alert('Failed: ' + e); });

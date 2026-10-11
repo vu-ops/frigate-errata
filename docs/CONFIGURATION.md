@@ -408,7 +408,7 @@ else to do. Otherwise create a wrapper unit or just use
 | `POST /errata/api/run-now` | Trigger an immediate harvest+analyze cycle (also a "Fetch latest" button in the header) |
 | `POST /errata/api/train` | Start a training run in the container background (also a "Train" button in the header). Re-exports the dataset first, then trains with the device from `training.device` (xpu with CPU fallback). 409 if already running, 503 if the image lacks ultralytics |
 | `GET /errata/api/models` | List published models, the model Frigate is currently serving, and config backups |
-| `POST /errata/api/models/activate` | Body `{"model": "errata_<stamp>.onnx"}`. Backs up the Frigate config, points `model.path` at the published model, sets `labelmap_path` to that model's own `errata_<stamp>.labels.txt` plus `input_dtype`/`model_type`, saves with `save_option=restart`, waits for Frigate to return. Refuses on a class-count/labelmap mismatch; the UI warns when the model omits labels Frigate is configured to track |
+| `POST /errata/api/models/activate` | Body `{"model": "errata_<stamp>.onnx", "force": false}`. Backs up the Frigate config, points `model.path` at the published model, sets `labelmap_path` to that model's own `errata_<stamp>.labels.txt` plus `input_dtype`/`model_type`, saves with `save_option=restart`, waits for Frigate to return. Refuses on a class-count/labelmap mismatch. Blocks (returns `{needs_confirm, missing}`) when the model omits expected labels (base taxonomy + enabled labels); pass `force: true` to deploy anyway |
 | `POST /errata/api/models/backups/<id>/revert` | Restore a previous Frigate config backup (a fresh backup of the current config is taken first), then restart Frigate |
 | `GET /errata/api/dataset/stats` | Summarize the on-disk YOLO dataset (human/pseudo images and objects, backgrounds, per-class train/val counts); the summary page renders this and warns when unexported corrections are not yet in the dataset |
 | `GET /errata/controls` / `POST /errata/controls` | Per-label controls. UI names: Collection (`all`=Human + Machine Review, `review_only`=Human Review Only, `off`=Monitor Only (Ignore)), Frigate Description Search (`search`), Human Verifications (`collect`=Collect Only \| `train`=Collect and Train), Machine Verifications (`collect` \| `train` \| `train_only`=Train Only, which keeps the existing confirmed events as pseudo-labels but sends new clean events to Ignored), Snapshot Limit (`keep`, blank = global `review.auto_keep_per_label`, 0 = keep forever). Each verification column also has a **Purge Data…** option: on save it deletes that label's data for that source (human = corrections; machine = auto-confirmed events + snapshots) and resets the column to `collect` — it is not a stored value. A label is trained when either source feeds training. Counts show images contributed; *Collect and Train* / *Train Only* is disabled at 0. Each column header fills every row client-side before saving |
@@ -569,7 +569,7 @@ model:
   width: 640
   height: 640
   input_dtype: float
-  labelmap_path: /config/models/published/labels.txt
+  labelmap_path: /config/models/published/errata_20261003-120000.labels.txt
   model_type: yolo-generic
 ```
 
@@ -577,11 +577,16 @@ model:
 > `model_type: yolo-generic` is required so Frigate uses the Ultralytics YOLO
 > parser rather than the default SSD one.
 
-With `training.auto_update_frigate_config: true`, the trainer rewrites
-`model.path` itself (reads config via `GET /api/config/raw`, patches only the
-`path:` line under the top-level `model:` section, writes via
-`POST /api/config/save`). Frigate reloads the changed config without a
-container restart.
+A trained model's class list is seeded from the **base model's own taxonomy**
+(COCO-80 for the YOLO variants) plus any labels enabled for training that aren't
+in it, so base classes (e.g. `car`) are retained when you stay within the base
+taxonomy. Appending a non-base label rebuilds the detection head (base classes
+may be untrained) and logs a warning.
+
+Deployment is **never automatic** (`training.auto_update_frigate_config` is no
+longer used by the trainer). Activate from the Summary page; the API
+(`POST /errata/api/models/activate`) refuses when the model is missing expected
+labels unless called with `force: true`. There is also `POST /errata/api/base-models/{name}/export-activate` for vanilla YOLO exports.
 
 Verify in Frigate logs that the detector loads the model; watch the first
 detections for sanity. Roll back: restore the previous `model.path`

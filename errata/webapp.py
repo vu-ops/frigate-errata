@@ -601,6 +601,12 @@ def create_app(config: dict) -> FastAPI:
             (c or {}).get("machine_verifications") in ("train", "train_only")
             for c in controls.values()
         )
+        from .trainer import list_published_models, missing_tracked_labels
+
+        published = list_published_models(config)
+        model_missing = []
+        if published:
+            model_missing = missing_tracked_labels(config, db, published[0]["name"])
         ctx = {
             "controls": controls,
             "labels": labels,
@@ -609,6 +615,7 @@ def create_app(config: dict) -> FastAPI:
             "global_keep": int(config["review"].get("auto_keep_per_label", 150)),
             "default_disabled": bool(db.kv_get(CONTROLS_DEFAULT_DISABLED_KEY) == "1"),
             "self_training": machine_on and _errata_model_active(),
+            "model_missing": model_missing,
             "msg": msg,
         }
         return render(request, "controls.html", ctx)
@@ -702,7 +709,7 @@ def create_app(config: dict) -> FastAPI:
         missing = {}
         for m in models:
             if m.get("format") == "onnx" and m.get("labels"):
-                missing[m["name"]] = missing_tracked_labels(config, m["name"])
+                missing[m["name"]] = missing_tracked_labels(config, db, m["name"])
         ctx = {
             "models": models,
             "missing": missing,
@@ -1098,7 +1105,7 @@ def create_app(config: dict) -> FastAPI:
 
             train_state["detail"] = "exporting dataset"
             train_state["phase"] = "exporting dataset"
-            exported = export_dataset(config, db, imgsz=imgsz)
+            exported = export_dataset(config, db, imgsz=imgsz, model_type=model_type)
             train_state["detail"] = "training"
             result = run_training(
                 config, db, device=None, on_progress=train_state.update,
@@ -1106,10 +1113,15 @@ def create_app(config: dict) -> FastAPI:
             )
             result["exported"] = exported
             db.kv_set("last_train_at", str(time.time()))
+            dep = result.get("deploy") or {}
+            summary = f"trained {Path(str(result.get('model'))).name}"
+            if dep.get("skipped"):
+                summary += " — deployed manually (auto-deploy off)"
             train_state.update(
                 {
                     "running": False, "finished_at": time.time(), "ok": True,
-                    "detail": json.dumps(result), "phase": "done", "progress": 1.0,
+                    "detail": summary, "result": json.dumps(result),
+                    "phase": "done", "progress": 1.0,
                 }
             )
         except Exception as exc:
@@ -1123,7 +1135,7 @@ def create_app(config: dict) -> FastAPI:
 
     @router.post("/api/train")
     def start_train(model_type: str = "", imgsz: int = 0):
-        from .trainer import ALL_MODELS, IMGSZ_CHOICES, trained_class_map
+        from .trainer import ALL_MODELS, IMGSZ_CHOICES, enabled_labels
 
         model_type = model_type.strip()
         if model_type and model_type not in ALL_MODELS:
@@ -1142,7 +1154,7 @@ def create_app(config: dict) -> FastAPI:
             )
         if train_state["running"]:
             return JSONResponse({"ok": False, "detail": "a training run is already in progress"}, status_code=409)
-        if not trained_class_map(config, db):
+        if not enabled_labels(config, db):
             return JSONResponse(
                 {"ok": False, "detail": "no labels have a verification source set to 'Collect and Train'; enable one on the Controls page"},
                 status_code=400,
@@ -1191,7 +1203,7 @@ def create_app(config: dict) -> FastAPI:
         versions = {Path(v["model_path"]).name: v for v in db.model_versions(limit=50)}
         models = list_published_models(config)
         for m in models:
-            m["missing"] = missing_tracked_labels(config, m["name"])
+            m["missing"] = missing_tracked_labels(config, db, m["name"])
             v = versions.get(m["name"])
             if v:
                 m["training_count"] = v["training_count"]
@@ -1219,8 +1231,9 @@ def create_app(config: dict) -> FastAPI:
 
         body = await request.json()
         name = str(body.get("model", ""))
+        force = bool(body.get("force"))
         with deploy_lock:
-            result = activate_model(config, db, name)
+            result = activate_model(config, db, name, force=force)
         return JSONResponse(result, status_code=200 if result.get("ok") else 400)
 
     @router.post("/api/models/backups/{backup_id}/revert")

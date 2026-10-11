@@ -178,7 +178,7 @@ class TestExport(Base):
         self.add_event("e1", "dog", correct="dog")
         reset_all_disabled(self.cfg, self.db,
                            tracked_labels(self.cfg) + attribute_labels(self.cfg))
-        self.assertEqual(trainer.trained_class_map(self.cfg, self.db), {})
+        self.assertEqual(trainer.enabled_labels(self.cfg, self.db), [])
         counts = trainer.export_dataset(self.cfg, self.db)
         self.assertEqual(counts["exported"], 0)
 
@@ -469,7 +469,7 @@ class TestVerifications(Base):
         pub.mkdir(parents=True, exist_ok=True)
         (pub / "errata_test.onnx").write_bytes(b"")
         (pub / "errata_test.labels.txt").write_text("cat\n")
-        missing = trainer.missing_tracked_labels(self.cfg, "errata_test.onnx")
+        missing = trainer.missing_tracked_labels(self.cfg, self.db, "errata_test.onnx")
         self.assertIn("car", missing)
         self.assertNotIn("cat", missing)
 
@@ -505,6 +505,37 @@ class TestPurge(Base):
                 "human_verifications_car": "collect", "machine_verifications_car": "purge",
             })
         self.assertIsNone(self.db.get_event("e1"))
+
+
+class TestClassListSeed(Base):
+    def test_base_taxonomy_seeded_and_appended(self):
+        set_control(self.cfg, self.db, "cat", human_verifications="train")
+        set_control(self.cfg, self.db, "coyote", human_verifications="train")
+        klass = trainer.model_class_list(self.cfg, self.db)
+        self.assertIn("car", klass)      # from the base (COCO) taxonomy
+        self.assertIn("person", klass)
+        self.assertIn("cat", klass)
+        self.assertIn("coyote", klass)   # appended (not in COCO)
+        self.assertEqual(klass.index("car"), trainer.base_taxonomy(self.cfg).index("car"))
+
+    def test_missing_tracked_labels_vs_base(self):
+        pub = Path(self.cfg["training"]["publish_dir"]) / "published"
+        pub.mkdir(parents=True, exist_ok=True)
+        (pub / "errata_test.onnx").write_bytes(b"")
+        (pub / "errata_test.labels.txt").write_text("cat\n")
+        missing = trainer.missing_tracked_labels(self.cfg, self.db, "errata_test.onnx")
+        self.assertIn("car", missing)
+        self.assertNotIn("cat", missing)
+
+    def test_activation_blocks_when_missing(self):
+        pub = Path(self.cfg["training"]["publish_dir"]) / "published"
+        pub.mkdir(parents=True, exist_ok=True)
+        (pub / "errata_x.onnx").write_bytes(b"")
+        (pub / "errata_x.labels.txt").write_text("cat\n")
+        res = trainer.activate_model(self.cfg, self.db, "errata_x.onnx")
+        self.assertFalse(res["ok"])
+        self.assertTrue(res.get("needs_confirm"))
+        self.assertTrue(res["missing"])
 
 
 if __name__ == "__main__":

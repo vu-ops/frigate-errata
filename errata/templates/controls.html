@@ -10,6 +10,12 @@
   detector (e.g. Frigate+) while collecting machine data.
 </div>
 {% endif %}
+{% if model_missing %}
+<div class="msg" style="background:#2b1d1d;border-color:#7a2e2e;">
+  <strong>Latest trained model is missing labels:</strong> {{ model_missing | join(', ') }}.
+  These are enabled here but absent from the most recent model — retrain to include them.
+</div>
+{% endif %}
 <form method="post" action="{{ base }}/controls">
 <table>
   <tr>

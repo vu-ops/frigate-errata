@@ -34,6 +34,76 @@ ALL_MODELS = [model for _label, models in MODEL_CHOICES for model in models]
 # Inference/training image sizes offered in the UI.
 IMGSZ_CHOICES = [320, 640]
 
+# COCO-80 taxonomy in Ultralytics order. Used as the fallback base taxonomy when
+# the base weights can't be loaded (e.g. ultralytics unavailable).
+COCO_NAMES = [
+    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck",
+    "boat", "traffic light", "fire hydrant", "stop sign", "parking meter", "bench",
+    "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra",
+    "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
+    "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove",
+    "skateboard", "surfboard", "tennis racket", "bottle", "wine glass", "cup",
+    "fork", "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange",
+    "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch",
+    "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse",
+    "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
+    "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier",
+    "toothbrush",
+]
+
+_BASE_TAXONOMY_CACHE: dict = {}
+
+
+def _names_to_list(names) -> list[str]:
+    if isinstance(names, dict):
+        try:
+            return [str(names[i]) for i in sorted(names)]
+        except (TypeError, ValueError):
+            return [str(v) for _k, v in names.items()]
+    if names:
+        return [str(x) for x in names]
+    return []
+
+
+def base_taxonomy(cfg: dict, model_type: str | None = None) -> list[str]:
+    """The classes baked into the chosen base model (e.g. COCO-80 for the YOLO bases).
+
+    Loaded from the base ``.pt`` once and cached; falls back to COCO-80 when the
+    weights can't be read (no ultralytics / offline).
+    """
+    training = cfg["training"]
+    name = str(model_type or training.get("model_type") or "yolov9s")
+    if name in _BASE_TAXONOMY_CACHE:
+        return list(_BASE_TAXONOMY_CACHE[name])
+    labels: list[str] = []
+    try:
+        from ultralytics import YOLO
+
+        weights = resolve_weights_path(name, training, None)
+        model = YOLO(weights if Path(weights).is_file() else name)
+        labels = _names_to_list(getattr(model, "names", None))
+    except Exception:
+        logger.warning("could not read base taxonomy for '%s'; using COCO fallback", name)
+    if not labels:
+        labels = list(COCO_NAMES)
+    _BASE_TAXONOMY_CACHE[name] = list(labels)
+    return labels
+
+
+def enabled_labels(cfg: dict, db: Database) -> list[str]:
+    """Object labels the user has enabled for training (Collect and Train / Train Only)."""
+    track = list(cfg["labels"]["track"])
+    controls = effective_controls(cfg, db, track)
+    return [l for l in track if _label_trains(controls.get(l, {}) or {})]
+
+
+def model_class_list(cfg: dict, db: Database, model_type: str | None = None) -> list[str]:
+    """Full class list of a trained model: base taxonomy + appended enabled labels."""
+    base = base_taxonomy(cfg, model_type)
+    seen = set(base)
+    appended = [l for l in enabled_labels(cfg, db) if l not in seen]
+    return base + appended
+
 
 def _select_pseudo_labels(cfg: dict, db: Database, class_map: dict) -> list:
     pseudo_cfg = cfg["training"].get("pseudo_labels", {}) or {}
@@ -87,16 +157,14 @@ def _label_trains(ctl: dict) -> bool:
             or ctl.get("machine_verifications", "train") in ("train", "train_only"))
 
 
-def trained_class_map(cfg: dict, db: Database) -> dict:
-    """Label -> class index for the classes actually being trained.
+def trained_class_map(cfg: dict, db: Database, model_type: str | None = None) -> dict:
+    """Label -> class index for a trained model.
 
-    Object classes (labels.track) whose Human or Machine Verifications control
-    is "Collect and Train". Brands/attributes and license_plate are never classes.
+    Seeded from the base model's own taxonomy (e.g. COCO-80) so base classes are
+    retained, then appended with any enabled custom labels that aren't in it.
+    Brands/attributes and license_plate are never classes.
     """
-    track = list(cfg["labels"]["track"])
-    controls = effective_controls(cfg, db, track)
-    trained = [l for l in track if _label_trains(controls.get(l, {}) or {})]
-    return {name: idx for idx, name in enumerate(trained)}
+    return {name: idx for idx, name in enumerate(model_class_list(cfg, db, model_type))}
 
 
 def verification_counts(cfg: dict, db: Database) -> dict[str, dict]:
@@ -135,16 +203,18 @@ def verification_counts(cfg: dict, db: Database) -> dict[str, dict]:
     }
 
 
-def export_dataset(cfg: dict, db: Database, imgsz: int | None = None) -> dict:
-    class_map = trained_class_map(cfg, db)
+def export_dataset(cfg: dict, db: Database, imgsz: int | None = None,
+                   model_type: str | None = None) -> dict:
+    class_map = trained_class_map(cfg, db, model_type)
     trained = list(class_map.keys())
+    enabled = set(enabled_labels(cfg, db))
     attribute_set = set(cfg["labels"].get("attributes") or []) | {"license_plate"}
     dataset_dir = Path(cfg["training"]["dataset_dir"])
     val_split = float(cfg["training"]["val_split"])
     region_crops = bool(cfg["training"].get("region_crops", True))
     imgsz = int(imgsz or cfg["training"]["imgsz"])
 
-    if not class_map:
+    if not enabled:
         logger.warning(
             "no labels have a verification source set to 'Collect and Train'; "
             "nothing to export. Enable at least one label on the Controls page."
@@ -164,7 +234,8 @@ def export_dataset(cfg: dict, db: Database, imgsz: int | None = None) -> dict:
             else:
                 dropped_ids.append(row["id"])
         elif (
-            label in class_map
+            label in enabled
+            and label in class_map
             and row["image_path"]
             and Path(row["image_path"]).is_file()
             and row["box"]
@@ -174,7 +245,7 @@ def export_dataset(cfg: dict, db: Database, imgsz: int | None = None) -> dict:
             # Attribute/enrichment labels are never detector classes: drop.
             dropped_ids.append(row["id"])
         else:
-            # Candidate/unenabled label: hold (keep unexported until enabled).
+            # Collected-but-not-enabled label: hold (keep until it is enabled).
             held_ids.append(row["id"])
     rows = positives + backgrounds
     if held_ids:
@@ -538,7 +609,7 @@ def backup_frigate_config(cfg: dict, db: Database, reason: str) -> tuple[int, st
     return backup_id, str(path)
 
 
-def activate_model(cfg: dict, db: Database, model_name: str) -> dict:
+def activate_model(cfg: dict, db: Database, model_name: str, force: bool = False) -> dict:
     safe_name = Path(model_name).name
     if safe_name != model_name or not safe_name.endswith(".onnx"):
         return {"ok": False, "error": "invalid model name"}
@@ -564,6 +635,16 @@ def activate_model(cfg: dict, db: Database, model_name: str) -> dict:
                 "ok": False,
                 "error": f"label/class mismatch: model outputs {nc} class(es) but "
                          f"{labels_file.name} has {len(labels)}",
+            }
+        # Guard: don't deploy a model that drops labels we expect (base taxonomy +
+        # labels enabled for training). Block unless the caller forces it.
+        missing = missing_tracked_labels(cfg, db, safe_name)
+        if missing and not force:
+            return {
+                "ok": False,
+                "needs_confirm": True,
+                "missing": missing,
+                "error": "model is missing expected labels: " + ", ".join(missing),
             }
         extra = {
             "labelmap_path": frigate_published_model_path(cfg, labels_file.name),
@@ -604,15 +685,15 @@ def activate_model(cfg: dict, db: Database, model_name: str) -> dict:
     return {"ok": True, "model": frigate_path, "frigate_ready": ready, "backup_id": backup_id}
 
 
-def missing_tracked_labels(cfg: dict, model_name: str) -> list[str]:
-    """Tracked labels absent from a published model's own labelmap (sorted)."""
+def missing_tracked_labels(cfg: dict, db: Database, model_name: str) -> list[str]:
+    """Expected labels (base taxonomy + enabled labels) absent from a model's labelmap."""
     publish_dir = Path(cfg["training"]["publish_dir"]) / "published"
     labels_file = publish_dir / f"{Path(model_name).stem}.labels.txt"
     if not labels_file.is_file():
         return []
     present = {l.strip() for l in labels_file.read_text().split("\n") if l.strip()}
-    track = list((cfg.get("labels", {}) or {}).get("track", []) or [])
-    return sorted(l for l in track if l not in present)
+    expected = model_class_list(cfg, db)
+    return sorted(l for l in expected if l not in present)
 
 
 def restore_backup(cfg: dict, db: Database, backup_id: int) -> dict:
@@ -670,7 +751,8 @@ def convert_onnx_input_to_nhwc(onnx_path: Path) -> Path:
     return onnx_path
 
 
-def publish_model(cfg: dict, db: Database, onnx_path: Path, training_count: int, metrics: dict) -> Path:
+def publish_model(cfg: dict, db: Database, onnx_path: Path, training_count: int,
+                  metrics: dict, model_type: str | None = None) -> Path:
     training = cfg["training"]
     publish_dir = Path(training["publish_dir"]) / "published"
     publish_dir.mkdir(parents=True, exist_ok=True)
@@ -678,7 +760,7 @@ def publish_model(cfg: dict, db: Database, onnx_path: Path, training_count: int,
     dest = publish_dir / f"errata_{stamp}.onnx"
     shutil.copyfile(onnx_path, dest)
 
-    labels = list(trained_class_map(cfg, db).keys())
+    labels = list(trained_class_map(cfg, db, model_type).keys())
     if not labels:
         raise ValueError("refusing to publish a model with zero classes; enable a label first")
     (publish_dir / "labels.txt").write_text("\n".join(labels) + "\n")
@@ -769,7 +851,7 @@ def run_training(
 ) -> dict:
     import multiprocessing as mp
 
-    if not trained_class_map(cfg, db):
+    if not enabled_labels(cfg, db):
         raise ValueError(
             "no labels have a verification source set to 'Collect and Train'; enable one "
             "on the Controls page before training"
@@ -883,6 +965,8 @@ def run_training(
     emit({"detail": "publishing model", "phase": "publish"})
     dataset = dataset_stats(cfg)
     duration_seconds = round(time.time() - run_started, 1)
+    base = base_taxonomy(cfg, use_model)
+    base_set = set(base)
     metrics = {
         "epochs": total_epochs,
         "imgsz": use_imgsz,
@@ -894,7 +978,17 @@ def run_training(
         "unexported_corrections": db.corrections_unexported_count(),
         "dataset": dataset,
     }
-    dest = publish_model(cfg, db, onnx_path, db.corrections_count(), metrics)
+    dest = publish_model(cfg, db, onnx_path, db.corrections_count(), metrics, model_type=use_model)
+    model_labels = list(trained_class_map(cfg, db, use_model).keys())
+    appended = [l for l in model_labels if l not in base_set]
+    if appended:
+        metrics["appended_labels"] = appended
+        metrics["head_rebuilt"] = True
+        logger.warning(
+            "model appends non-base labels %s; the detection head was rebuilt so "
+            "the base classes (%s…) may be untrained",
+            appended, base[0] if base else "?",
+        )
     logger.info(
         "published model %s (weights %s; trained on %d images / %d objects: %s)",
         dest,
@@ -904,14 +998,15 @@ def run_training(
         {c["label"]: c["total"] for c in dataset["classes"]},
     )
     db.kv_set("last_model_created_at", str(time.time()))
-    if training["auto_update_frigate_config"]:
-        backup_frigate_config(cfg, db, "pre-autoupdate")
-        update_frigate_config(
-            cfg, db, frigate_published_model_path(cfg, dest.name),
-            width=use_imgsz, height=use_imgsz,
-            labelmap_path=frigate_published_model_path(cfg, f"{dest.stem}.labels.txt"),
-        )
-    return {"model": str(dest), "device": device, "dataset": dataset}
+    # Deployment is never automatic: a trained model may omit labels Frigate is
+    # configured to detect. Activate it from the Summary page (with a guard).
+    return {
+        "model": str(dest),
+        "device": device,
+        "dataset": dataset,
+        "deploy": {"ok": False, "skipped": True,
+                   "reason": "auto-deploy disabled; activate manually on the Summary page"},
+    }
 
 
 def refresh_snapshots(cfg: dict, db: Database) -> dict:

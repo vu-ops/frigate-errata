@@ -239,11 +239,20 @@ PyTorch falls back to CPU at runtime.
      `models/published/` on the server.
    - `./deploy/train.sh` (CLI, CPU container; needs a `NETWORK` env var or the
      default `frigate_default` network).
-3. A successful train writes the ONNX, `labels.txt`, and `metrics.json` to
-   `models/published/` and lists the version on the Summary page.
-4. **Point Frigate at it** (only after a successful train). In Frigate's
-   `config.yml`, replace the model block (keep the old path commented for
-   rollback):
+3. A successful train writes the ONNX, a **per-model** `errata_<stamp>.labels.txt`,
+   and `metrics.json` to `models/published/` and lists the version on the Summary
+   page. The trained model's class list is seeded from the **base model's own
+   taxonomy** (COCO-80 for the YOLO variants) plus any custom labels you enabled —
+   so training within the base classes keeps the base detector's classes (e.g.
+   `car`), while appending a non-base label rebuilds the head (base classes may be
+   lost — you're warned).
+4. **Activate it from the Summary page.** Deployment is **never automatic**: a
+   model may omit labels Frigate is configured to detect, so Errata blocks the
+   activation and lists what's missing, with a **"Deploy anyway"** override. A
+   config backup is taken before every activation.
+
+   To point Frigate at it by hand, replace the model block (keep the old path
+   commented for rollback):
 
    ```yaml
    model:
@@ -253,7 +262,7 @@ PyTorch falls back to CPU at runtime.
      height: 320                   # must match the model's training imgsz
      input_tensor: nhwc            # Errata exports channels-last (NHWC)
      input_dtype: float
-     labelmap_path: /config/models/published/labels.txt
+     labelmap_path: /config/models/published/errata_<stamp>.labels.txt
      model_type: yolo-generic
    ```
 
