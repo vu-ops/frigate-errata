@@ -425,7 +425,9 @@ def dataset_stats(cfg: dict) -> dict:
     dataset_dir = Path(cfg["training"]["dataset_dir"])
     labels_file = dataset_dir / "labels.txt"
     if labels_file.is_file():
-        class_names = labels_file.read_text().split()
+        # One class per line: COCO names contain spaces ("parking meter",
+        # "traffic light"), so whitespace-splitting shifts every index.
+        class_names = [l.strip() for l in labels_file.read_text().splitlines() if l.strip()]
     else:
         class_names = list(cfg["labels"]["track"])
 

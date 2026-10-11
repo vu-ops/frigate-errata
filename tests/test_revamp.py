@@ -572,5 +572,23 @@ class TestClassListSeed(Base):
         self.assertIn("dog", held)
 
 
+def test_dataset_stats_parses_multiclass_names(self):
+        from errata.trainer import dataset_stats
+
+        ds = Path(self.cfg["training"]["dataset_dir"])
+        (ds / "labels" / "train").mkdir(parents=True, exist_ok=True)
+        (ds / "labels.txt").write_text(
+            "person\nbicycle\ncar\nmotorcycle\nairplane\nbus\ntrain\ntruck\nboat\n"
+            "traffic light\nfire hydrant\nstop sign\nparking meter\nbench\nbird\n"
+            "cat\ndog\n"
+        )
+        (ds / "labels" / "train" / "e1.txt").write_text("15 0.5 0.5 0.3 0.3\n")
+        (ds / "labels" / "train" / "bg.txt").write_text("")
+        stats = dataset_stats(self.cfg)
+        self.assertEqual(stats["classes"][0]["label"], "cat")
+        self.assertEqual(stats["classes"][0]["total"], 1)
+        self.assertEqual(stats["backgrounds"]["total"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
