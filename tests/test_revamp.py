@@ -538,5 +538,39 @@ class TestClassListSeed(Base):
         self.assertTrue(res["missing"])
 
 
+    def test_full_rebuild_replaces_stale_annotations(self):
+        ds = Path(self.cfg["training"]["dataset_dir"])
+        self.add_event("e1", "dog", correct="dog")
+        set_control(self.cfg, self.db, "dog", human_verifications="train")
+        trainer.export_dataset(self.cfg, self.db)
+        # Plant stale files mimicking an older export (different class mapping).
+        (ds / "images" / "train" / "stale_event.jpg").write_bytes(b"x")
+        (ds / "labels" / "train" / "stale_event.txt").write_text("0 0.5 0.5 0.2 0.2\n")
+        # Relabel the correction (dog -> cat) and swap the enabled label.
+        with self.db.connect() as conn:
+            conn.execute("UPDATE corrections SET correct_label='cat' WHERE event_id='e1'")
+        set_control(self.cfg, self.db, "dog", human_verifications="collect",
+                    machine_verifications="collect")
+        set_control(self.cfg, self.db, "cat", human_verifications="train")
+        trainer.export_dataset(self.cfg, self.db)
+        classes = set()
+        for sub in ("train", "val"):
+            for f in (ds / "labels" / sub).glob("*.txt"):
+                classes.update(line.split()[0] for line in f.read_text().splitlines() if line.strip())
+        self.assertIn("15", classes)     # cat's COCO index
+        self.assertNotIn("16", classes)  # stale dog annotation gone
+        self.assertFalse((ds / "labels" / "train" / "stale_event.txt").exists())
+
+    def test_held_corrections_marked_unexported(self):
+        self.add_event("e1", "dog", correct="dog")
+        set_control(self.cfg, self.db, "dog", human_verifications="train")
+        trainer.export_dataset(self.cfg, self.db)
+        set_control(self.cfg, self.db, "dog", human_verifications="collect",
+                    machine_verifications="collect")
+        trainer.export_dataset(self.cfg, self.db)
+        held = [r["correct_label"] for r in self.db.corrections_unexported()]
+        self.assertIn("dog", held)
+
+
 if __name__ == "__main__":
     unittest.main()

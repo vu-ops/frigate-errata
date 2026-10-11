@@ -442,6 +442,13 @@ class Database:
                 "SELECT * FROM corrections WHERE exported = 0 ORDER BY collected_at ASC"
             ).fetchall()
 
+    def corrections_all(self) -> list[sqlite3.Row]:
+        """Every stored correction (the dataset is rebuilt from scratch)."""
+        with self.connect() as conn:
+            return conn.execute(
+                "SELECT * FROM corrections ORDER BY collected_at ASC"
+            ).fetchall()
+
     def corrections_unexported_count(self) -> int:
         with self.connect() as conn:
             row = conn.execute(
@@ -461,6 +468,18 @@ class Database:
     def corrections_reset_exported(self) -> None:
         with self.connect() as conn:
             conn.execute("UPDATE corrections SET exported = 0")
+
+    def corrections_mark_unexported(self, ids: list[int]) -> None:
+        """Flag corrections as not-in-dataset (e.g. held after a label was disabled)."""
+        if not ids:
+            return
+        with self.connect() as conn:
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                marks = ",".join("?" * len(chunk))
+                conn.execute(
+                    f"UPDATE corrections SET exported = 0 WHERE id IN ({marks})", chunk
+                )
 
     def insert_correction(self, correction: dict) -> None:
         with self.connect() as conn:

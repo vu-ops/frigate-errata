@@ -221,7 +221,12 @@ def export_dataset(cfg: dict, db: Database, imgsz: int | None = None,
         )
         return {"exported": 0, "train": 0, "val": 0, "background": 0, "pseudo": 0}
 
-    all_rows = db.corrections_unexported()
+    # Full rebuild: the dataset is deterministic from the database, so every
+    # export wipes the previous dataset and re-exports ALL corrections. This
+    # prevents stale files from earlier exports (old labels or an old class
+    # mapping) from poisoning training — e.g. events relabelled since the last
+    # run would otherwise keep their outdated annotations.
+    all_rows = db.corrections_all()
     positives = []
     backgrounds = []
     dropped_ids = []
@@ -250,25 +255,31 @@ def export_dataset(cfg: dict, db: Database, imgsz: int | None = None,
     rows = positives + backgrounds
     if held_ids:
         logger.info("holding %d correction(s) for labels not currently trained", len(held_ids))
+        db.corrections_mark_unexported(held_ids)
 
 
     counts = {"exported": 0, "train": 0, "val": 0, "background": 0, "pseudo": 0}
     pseudo_rows = _select_pseudo_labels(cfg, db, class_map)
 
-    # Drop pseudo-label files from previous exports so the dataset always
-    # reflects the current selection (e.g. after an artifact filter changes).
-    for sub in ("images/train", "labels/train"):
+    # Drop the previous export entirely so the dataset always reflects the
+    # current DB state and class mapping (not just pseudo files).
+    removed = 0
+    for sub in ("images/train", "labels/train", "images/val", "labels/val"):
         stale_dir = dataset_dir / sub
         if stale_dir.is_dir():
-            for stale in stale_dir.glob("pseudo_*"):
-                stale.unlink(missing_ok=True)
+            for stale in stale_dir.iterdir():
+                if stale.is_file():
+                    stale.unlink(missing_ok=True)
+                    removed += 1
+    if removed:
+        logger.info("cleared %d stale dataset file(s) for a full re-export", removed)
 
     if not rows and not pseudo_rows:
         db.corrections_mark_exported(dropped_ids)
         if dropped_ids:
             logger.info("no exportable corrections, marked %d records as processed", len(dropped_ids))
         else:
-            logger.info("no unexported corrections, dataset unchanged")
+            logger.info("no corrections at all; dataset is empty")
         return counts
 
     if len(rows) < 4:
@@ -1269,6 +1280,7 @@ def main() -> None:
         db.corrections_reset_exported()
         logger.info("dataset wiped and exported flags reset")
 
+    # Every export is a full rebuild now; --rebuild only forces a clean start.
     if args.export_only or args.rebuild or not args.train:
         export_dataset(cfg, db, imgsz=args.imgsz)
         return
